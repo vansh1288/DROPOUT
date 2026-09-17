@@ -1,0 +1,41 @@
+using sysbus
+using sysbus.monitor
+using sysbus.cpu
+using sysbus.memory
+using sysbus.network
+
+macro start_simulation($num_nodes, $elf_path, $base_port)
+    $switch = Machine.Create("switch")
+    $switch.Start()
+
+    for $i in range($num_nodes)
+        $node_name = "node" + $i
+        emulation CreateMachine($node_name)
+        select $node_name
+        
+        machine LoadPlatformDescription @platforms/cpus/stm32f446re.repl
+        sysbus LoadELF @$elf_path
+        
+        $mac = "02:00:00:00:00:" + $i.ToString("X2")
+        $nic = sysbus.network Create("tap", $node_name + "_tap", $mac)
+        $switch.Connect($nic)
+        
+        $port = $base_port + $i
+        $nic.SetOption("port", $port)
+        
+        peripheral cpu.Configure("frequency", 180000000)
+        
+        emulation StartAll()
+    end
+
+    select $switch
+    monitor start
+end
+
+macro run_experiment($num_nodes=5)
+    $elf = "build/cortex_m4/firmware.elf"
+    $base_port = 12000
+    start_simulation($num_nodes, $elf, $base_port)
+end
+
+run_experiment(5)
