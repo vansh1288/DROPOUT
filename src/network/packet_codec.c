@@ -1,8 +1,25 @@
-#include "protocol_types.h"
-#include <stdint.h>
+#include "packet_codec.h"
+#include <tinycrypt/hmac.h>
+#include <tinycrypt/sha256.h>
 #include <string.h>
 
 #define HEADER_SIZE 16
+#define MAC_SIZE 32
+
+static void build_mac_data(const msg_header_t* hdr, uint8_t* mac_data) {
+    mac_data[0] = (hdr->protocol_version >> 24) & 0xFF;
+    mac_data[1] = (hdr->protocol_version >> 16) & 0xFF;
+    mac_data[2] = (hdr->protocol_version >> 8) & 0xFF;
+    mac_data[3] = hdr->protocol_version & 0xFF;
+    mac_data[4] = (hdr->round_id >> 24) & 0xFF;
+    mac_data[5] = (hdr->round_id >> 16) & 0xFF;
+    mac_data[6] = (hdr->round_id >> 8) & 0xFF;
+    mac_data[7] = hdr->round_id & 0xFF;
+    mac_data[8] = hdr->client_id;
+    mac_data[9] = hdr->message_type;
+    mac_data[10] = (hdr->sequence_number >> 8) & 0xFF;
+    mac_data[11] = hdr->sequence_number & 0xFF;
+}
 
 pqc_status_t packet_codec_encode_header(const msg_header_t* hdr, uint8_t* out) {
     if (!hdr || !out) return ERR_INVALID_ARGUMENT;
@@ -34,6 +51,27 @@ pqc_status_t packet_codec_decode_header(const uint8_t* in, msg_header_t* hdr) {
     hdr->sequence_number = ((uint16_t)in[10] << 8) | in[11];
     hdr->payload_length = ((uint16_t)in[12] << 8) | in[13];
     hdr->reserved = ((uint16_t)in[14] << 8) | in[15];
+    return PQC_SUCCESS;
+}
+
+pqc_status_t packet_codec_compute_mac(const uint8_t* key, const uint8_t* data, size_t data_len, uint8_t* mac) {
+    if (!key || !data || !mac) return ERR_INVALID_ARGUMENT;
+    struct tc_hmac_state_struct hmac;
+    tc_hmac_set_key(&hmac, key, 32);
+    tc_hmac_init(&hmac);
+    tc_hmac_update(&hmac, data, data_len);
+    tc_hmac_final(mac, MAC_SIZE, &hmac);
+    return PQC_SUCCESS;
+}
+
+pqc_status_t packet_codec_verify_mac(const uint8_t* key, const uint8_t* data, size_t data_len, const uint8_t* mac) {
+    if (!key || !data || !mac) return ERR_INVALID_ARGUMENT;
+    uint8_t expected_mac[MAC_SIZE];
+    pqc_status_t ret = packet_codec_compute_mac(key, data, data_len, expected_mac);
+    if (ret != PQC_SUCCESS) return ret;
+    for (size_t i = 0; i < MAC_SIZE; i++) {
+        if (expected_mac[i] != mac[i]) return ERR_AUTH_FAILED;
+    }
     return PQC_SUCCESS;
 }
 

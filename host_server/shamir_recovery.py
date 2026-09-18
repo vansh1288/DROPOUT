@@ -1,9 +1,18 @@
 import secrets
 from typing import List, Tuple, Dict
 
+try:
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    from cryptography.hazmat.backends import default_backend
+    CRYPTO_AVAILABLE = True
+except ImportError:
+    CRYPTO_AVAILABLE = False
+
 FIELD_MODULUS = 3329
 BARRETT_MULTIPLIER = 20159
 BARRETT_SHIFT = 26
+CHUNK_ELEMENTS = 128
+CHUNK_BYTES = CHUNK_ELEMENTS * 2
 
 def barrett_reduce(a: int) -> int:
     t = (a * BARRETT_MULTIPLIER) >> BARRETT_SHIFT
@@ -83,3 +92,53 @@ def reconstruct_secret_bytes(shares: List[Tuple[int, bytes]]) -> bytes:
         secret_bytes[byte_idx] = reconstruct_secret(byte_shares)
     
     return bytes(secret_bytes)
+
+def aes_ctr_stream(key: bytes, nonce: bytes, length: int) -> bytes:
+    if not CRYPTO_AVAILABLE:
+        raise RuntimeError("cryptography library not available")
+    cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
+    encryptor = cipher.encryptor()
+    return encryptor.update(b"\x00" * length) + encryptor.finalize()
+
+def generate_mask_from_seed(seed: bytes, length: int) -> List[int]:
+    stream = aes_ctr_stream(seed, bytes(16), length)
+    masks = []
+    for i in range(0, len(stream), 2):
+        if i + 1 < len(stream):
+            val = (stream[i] | (stream[i+1] << 8)) % FIELD_MODULUS
+            masks.append(val)
+        elif i < len(stream):
+            val = stream[i] % FIELD_MODULUS
+            masks.append(val)
+    return masks
+
+def recover_dropped_client_masks(dropped_client_shared_secret: bytes, round_id: int, peer_ids: List[int], dropped_client_id: int, num_chunks: int) -> Dict[int, List[int]]:
+    recovered_masks = {}
+    for chunk_idx in range(num_chunks):
+        combined_mask = [0] * CHUNK_ELEMENTS
+        for peer_id in peer_ids:
+            seed_info = bytes([min(dropped_client_id, peer_id), max(dropped_client_id, peer_id)]) + round_id.to_bytes(4, 'big') + chunk_idx.to_bytes(2, 'big')
+            prk = hmac.new(b"", dropped_client_shared_secret, hashlib.sha256).digest()
+            stream_seed = hkdf_expand(prk, b"SwiftAgg-StreamMask-v1" + seed_info, 32)
+            peer_mask = generate_mask_from_seed(stream_seed, CHUNK_BYTES)
+            sign = 1 if dropped_client_id < peer_id else -1
+            for i in range(CHUNK_ELEMENTS):
+                combined_mask[i] = (combined_mask[i] + sign * peer_mask[i]) % FIELD_MODULUS
+        recovered_masks[chunk_idx] = combined_mask
+    return recovered_masks
+
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    if not salt:
+        salt = bytes(32)
+    return hmac.new(salt, ikm, hashlib.sha256).digest()
+
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    okm = b""
+    t = b""
+    ctr = 1
+    while len(okm) < length:
+        h = hmac.new(prk, t + info + bytes([ctr]), hashlib.sha256)
+        t = h.digest()
+        okm += t
+        ctr += 1
+    return okm[:length]

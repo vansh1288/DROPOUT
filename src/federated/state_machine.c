@@ -6,9 +6,17 @@
 
 #define MAX_CLIENTS 16
 #define STATE_TIMEOUT_MS 5000
+#define LOCAL_TRAINING_DELAY_MS 100
 
 static protocol_state_buffer_t* get_proto_state(void) {
     return scratch_get_proto_state();
+}
+
+static void mock_local_training(client_protocol_ctx_t* ctx) {
+    for (volatile uint32_t i = 0; i < LOCAL_TRAINING_DELAY_MS * 1000; i++) {
+        __asm__ volatile ("nop");
+    }
+    (void)ctx;
 }
 
 pqc_status_t state_machine_init(client_protocol_ctx_t* ctx, uint8_t client_id, uint32_t round_id) {
@@ -62,6 +70,12 @@ pqc_status_t state_machine_handle_mask_setup(client_protocol_ctx_t* ctx, const m
     return state_machine_transition(ctx, STATE_LOCAL_TRAINING);
 }
 
+pqc_status_t state_machine_handle_local_training(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload) {
+    if (!ctx || ctx->state != STATE_LOCAL_TRAINING) return ERR_INVALID_STATE;
+    mock_local_training(ctx);
+    return state_machine_transition(ctx, STATE_MASKED_UPDATE_STREAM);
+}
+
 pqc_status_t state_machine_handle_stream_chunk(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload, uint16_t payload_len) {
     if (!ctx || ctx->state != STATE_MASKED_UPDATE_STREAM) return ERR_INVALID_STATE;
     if (hdr->sequence_number != ctx->chunk_ctx.chunk_index) return ERR_SEQUENCE_MISMATCH;
@@ -108,7 +122,7 @@ pqc_status_t state_machine_process_message(client_protocol_ctx_t* ctx, const msg
         case STATE_MASK_SETUP:
             return state_machine_handle_mask_setup(ctx, hdr, payload);
         case STATE_LOCAL_TRAINING:
-            return state_machine_transition(ctx, STATE_MASKED_UPDATE_STREAM);
+            return state_machine_handle_local_training(ctx, hdr, payload);
         case STATE_MASKED_UPDATE_STREAM:
             if (hdr->message_type == MSG_TYPE_MASK_CHUNK) {
                 return state_machine_handle_stream_chunk(ctx, hdr, payload, payload_len);
