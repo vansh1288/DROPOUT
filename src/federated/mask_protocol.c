@@ -25,8 +25,8 @@ pqc_status_t mask_protocol_init_pairwise(pairwise_context_t* ctx, uint8_t num_pe
     return PQC_SUCCESS;
 }
 
-pqc_status_t mask_protocol_derive_pairwise_seeds(pairwise_context_t* ctx, uint8_t local_id, const uint8_t* peer_kem_secrets, uint32_t round_id) {
-    if (!ctx || !peer_kem_secrets || ctx->num_peers == 0) return ERR_INVALID_ARGUMENT;
+pqc_status_t mask_protocol_derive_pairwise_seeds(pairwise_context_t* ctx, uint8_t local_id, const uint8_t* client_client_kem_secrets, uint32_t round_id) {
+    if (!ctx || !client_client_kem_secrets || ctx->num_peers == 0) return ERR_INVALID_ARGUMENT;
     for (uint8_t i = 0; i < ctx->num_peers; i++) {
         uint8_t peer_id = ctx->peers[i].peer_client_id;
         uint8_t client_a = local_id;
@@ -37,18 +37,18 @@ pqc_status_t mask_protocol_derive_pairwise_seeds(pairwise_context_t* ctx, uint8_
             client_b = tmp;
         }
         pqc_status_t ret = kem_adapter_derive_pairwise_mask_seed(
-            &peer_kem_secrets[i * ML_KEM_1024_SHARED_SECRET_BYTES],
+            &client_client_kem_secrets[i * ML_KEM_1024_SHARED_SECRET_BYTES],
             client_a, client_b, round_id,
             ctx->peers[i].mask_seed
         );
         if (ret != PQC_SUCCESS) return ret;
-        memcpy(ctx->peers[i].shared_secret, &peer_kem_secrets[i * ML_KEM_1024_SHARED_SECRET_BYTES], ML_KEM_1024_SHARED_SECRET_BYTES);
+        memcpy(ctx->peers[i].shared_secret, &client_client_kem_secrets[i * ML_KEM_1024_SHARED_SECRET_BYTES], ML_KEM_1024_SHARED_SECRET_BYTES);
     }
     return PQC_SUCCESS;
 }
 
 pqc_status_t mask_protocol_generate_chunk_mask(pairwise_context_t* ctx, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, int16_t* output_mask) {
-    if (!ctx || !output_mask || chunk_size > 128) return ERR_INVALID_ARGUMENT;
+    if (!ctx || !output_mask || chunk_size > CHUNK_BUFFER_BYTES / 2) return ERR_INVALID_ARGUMENT;
     crypto_zeroize(output_mask, chunk_size * sizeof(int16_t));
     for (uint8_t i = 0; i < ctx->num_peers; i++) {
         uint8_t stream_seed[32];
@@ -57,7 +57,7 @@ pqc_status_t mask_protocol_generate_chunk_mask(pairwise_context_t* ctx, uint8_t 
         );
         if (ret != PQC_SUCCESS) return ret;
         mask_prg_init(stream_seed);
-        int16_t peer_mask[128];
+        int16_t peer_mask[CHUNK_BUFFER_BYTES / 2];
         mask_prg_expand((uint8_t*)peer_mask, chunk_size * sizeof(int16_t));
         int32_t sign = (client_id < ctx->peers[i].peer_client_id) ? 1 : -1;
         for (uint16_t j = 0; j < chunk_size; j++) {

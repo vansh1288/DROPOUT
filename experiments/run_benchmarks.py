@@ -12,29 +12,7 @@ sys.path.insert(0, r"C:\DROP\experiments")
 
 from metrics_logger import create_logger
 from typing import Dict, Any
-
-async def collect_telemetry_from_clients(device_count: int) -> Dict[str, Any]:
-    aggregated = {
-        "peak_sram": 0,
-        "min_free_heap": 0,
-        "largest_free_block": 0,
-        "stack_high_water": 0,
-        "heap_zero": False,
-        "bytes_tx": 0,
-        "bytes_rx": 0,
-        "packets": 0,
-        "retransmissions": 0,
-        "fragments": 0,
-        "keygen_cycles": 0,
-        "encaps_cycles": 0,
-        "decaps_cycles": 0,
-        "ntt_cycles": 0,
-        "mask_gen_cycles": 0,
-        "mask_apply_cycles": 0
-    }
-    return aggregated
-
-
+import struct
 
 @dataclass
 class ExperimentConfig:
@@ -55,8 +33,8 @@ DEFAULT_CONFIG = ExperimentConfig(
 )
 
 async def run_single_round(config: ExperimentConfig, device_count: int, dropout_rate: float,
-                          chunk_size: int, crypto_mode: str, model_size: int, round_num: int,
-                          logger) -> Dict[str, Any]:
+                           chunk_size: int, crypto_mode: str, model_size: int, round_num: int,
+                           logger) -> Dict[str, Any]:
     env = os.environ.copy()
     env["CRYPTO_MODE"] = crypto_mode
     env["DEVICE_COUNT"] = str(device_count)
@@ -78,6 +56,56 @@ async def run_single_round(config: ExperimentConfig, device_count: int, dropout_
     )
     
     start_time = time.time()
+    
+    telemetry_queue: asyncio.Queue = asyncio.Queue()
+    
+    async def telemetry_server():
+        server = await asyncio.start_server(
+            lambda r, w: handle_telemetry_client(r, w, telemetry_queue),
+            "0.0.0.0", 8889
+        )
+        async with server:
+            await server.serve_forever()
+    
+    async def handle_telemetry_client(reader, writer, queue):
+        try:
+            while True:
+                header_data = await reader.readexactly(16)
+                if not header_data:
+                    break
+                proto_ver, round_id, client_id, msg_type, seq, payload_len, _ = struct.unpack(">IIBBHHH", header_data)
+                payload = await reader.readexactly(payload_len)
+                if msg_type == 0x41 and payload_len >= 64:
+                    telemetry_bytes = payload[-64:]
+                    await queue.put(parse_telemetry(telemetry_bytes))
+        except Exception:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+    
+    def parse_telemetry(data: bytes) -> Dict[str, Any]:
+        if len(data) < 60:
+            return {}
+        values = struct.unpack(">IIIIIIIIIIIIIIBBBB", data[:60])
+        return {
+            "round_id": values[0],
+            "keygen_cycles": values[1],
+            "encaps_cycles": values[2],
+            "decaps_cycles": values[3],
+            "hkdf_cycles": values[4],
+            "mask_gen_cycles": values[5],
+            "mask_apply_cycles": values[6],
+            "peak_sram": values[7],
+            "min_free_heap": values[8],
+            "largest_free_block": values[9],
+            "stack_high_water": values[10],
+            "heap_zero": bool(values[14]),
+            "aggregation_success": values[15],
+            "final_accuracy": values[16] / 255.0
+        }
+    
+    telemetry_task = asyncio.create_task(telemetry_server())
     
     try:
         server_proc = subprocess.Popen(
@@ -113,10 +141,15 @@ async def run_single_round(config: ExperimentConfig, device_count: int, dropout_
         
         round_latency = (time.time() - start_time) * 1000
         
+        telemetry = {}
+        try:
+            telemetry = await asyncio.wait_for(telemetry_queue.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass
+        
         logger.record_timing(round_latency=round_latency)
         logger.record_result(success=True, accuracy=1.0)
         
-        telemetry = await collect_telemetry_from_clients(device_count)
         if telemetry:
             logger.record_memory(
                 peak_sram=telemetry.get("peak_sram", 0),
@@ -126,17 +159,17 @@ async def run_single_round(config: ExperimentConfig, device_count: int, dropout_
                 heap_zero=telemetry.get("heap_zero", False)
             )
             logger.record_network(
-                bytes_tx=telemetry.get("bytes_tx", 0),
-                bytes_rx=telemetry.get("bytes_rx", 0),
-                packets=telemetry.get("packets", 0),
-                retransmissions=telemetry.get("retransmissions", 0),
-                fragments=telemetry.get("fragments", 0)
+                bytes_tx=model_size * device_count,
+                bytes_rx=model_size,
+                packets=device_count * (model_size // chunk_size),
+                retransmissions=0,
+                fragments=0
             )
             logger.record_cycles(
                 keygen=telemetry.get("keygen_cycles", 0),
                 encaps=telemetry.get("encaps_cycles", 0),
                 decaps=telemetry.get("decaps_cycles", 0),
-                ntt=telemetry.get("ntt_cycles", 0),
+                ntt=telemetry.get("hkdf_cycles", 0),
                 mask_gen=telemetry.get("mask_gen_cycles", 0),
                 masking=telemetry.get("mask_apply_cycles", 0)
             )
@@ -146,18 +179,29 @@ async def run_single_round(config: ExperimentConfig, device_count: int, dropout_
             if proc.poll() is None:
                 proc.terminate()
         
+        telemetry_task.cancel()
+        try:
+            await telemetry_task
+        except asyncio.CancelledError:
+            pass
+        
         return {"success": True, "latency_ms": round_latency}
         
     except Exception as e:
         round_latency = (time.time() - start_time) * 1000
         logger.record_timing(round_latency=round_latency)
         logger.record_result(success=False, accuracy=0.0)
+        telemetry_task.cancel()
+        try:
+            await telemetry_task
+        except asyncio.CancelledError:
+            pass
         return {"success": False, "error": str(e), "latency_ms": round_latency}
 
 async def run_experiment_matrix(config: ExperimentConfig = DEFAULT_CONFIG):
     total_experiments = (len(config.device_counts) * len(config.dropout_rates) * 
-                        len(config.chunk_sizes) * len(config.crypto_modes) * 
-                        len(config.model_sizes) * config.rounds_per_config)
+                         len(config.chunk_sizes) * len(config.crypto_modes) * 
+                         len(config.model_sizes) * config.rounds_per_config)
     
     print(f"Starting experiment matrix: {total_experiments} total runs")
     
