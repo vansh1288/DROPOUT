@@ -9,11 +9,11 @@ using timer = Renode.Peripherals.Timers.SysTick
 using flash = Renode.Peripherals.Flash
 using network = Renode.Networking
 
-$bin = @C:\DROPuild\cortex_m4irmware.elf
+$bin = @C:\DROP\build\cortex_m4\firmware.elf
 
 emulator SetGlobalQuantum "100000"
 
-$num_nodes = 3
+$num_nodes = 10
 
 $switch = switch.CreateSwitch()
 $switch.Name = "virtual_switch"

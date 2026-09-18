@@ -17,62 +17,7 @@
 #define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
 #define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
 
-#define CRYPTO_MODE_PQC_ML_KEM_512   0
-#define CRYPTO_MODE_PQC_ML_KEM_768   1
-#define CRYPTO_MODE_PQC_ML_KEM_1024  2
-#define CRYPTO_MODE_CLASSICAL_X25519 3
-
-#ifdef CRYPTO_MODE
-#define KEM_ACTIVE_MODE CRYPTO_MODE
-#else
-#define KEM_ACTIVE_MODE CRYPTO_MODE_PQC_ML_KEM_768
-#endif
-
-#if KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_512
-#define KEM_KEYPAIR_FN   pqcrystals_kyber512_ref_keypair
-#define KEM_ENCAP_FN     pqcrystals_kyber512_ref_enc
-#define KEM_DECAP_FN     pqcrystals_kyber512_ref_dec
-#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_512
-#define KEM_PK_BYTES     ML_KEM_512_PUBLIC_KEY_BYTES
-#define KEM_SK_BYTES     ML_KEM_512_SECRET_KEY_BYTES
-#define KEM_CT_BYTES     ML_KEM_512_CIPHERTEXT_BYTES
-#define KEM_SS_BYTES     ML_KEM_512_SHARED_SECRET_BYTES
-#elif KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_768
-#define KEM_KEYPAIR_FN   pqcrystals_kyber768_ref_keypair
-#define KEM_ENCAP_FN     pqcrystals_kyber768_ref_enc
-#define KEM_DECAP_FN     pqcrystals_kyber768_ref_dec
-#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_768
-#define KEM_PK_BYTES     ML_KEM_768_PUBLIC_KEY_BYTES
-#define KEM_SK_BYTES     ML_KEM_768_SECRET_KEY_BYTES
-#define KEM_CT_BYTES     ML_KEM_768_CIPHERTEXT_BYTES
-#define KEM_SS_BYTES     ML_KEM_768_SHARED_SECRET_BYTES
-#elif KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_1024
-#define KEM_KEYPAIR_FN   pqcrystals_kyber1024_ref_keypair
-#define KEM_ENCAP_FN     pqcrystals_kyber1024_ref_enc
-#define KEM_DECAP_FN     pqcrystals_kyber1024_ref_dec
-#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_1024
-#define KEM_PK_BYTES     ML_KEM_1024_PUBLIC_KEY_BYTES
-#define KEM_SK_BYTES     ML_KEM_1024_SECRET_KEY_BYTES
-#define KEM_CT_BYTES     ML_KEM_1024_CIPHERTEXT_BYTES
-#define KEM_SS_BYTES     ML_KEM_1024_SHARED_SECRET_BYTES
-#elif KEM_ACTIVE_MODE == CRYPTO_MODE_CLASSICAL_X25519
-#define KEM_KEYPAIR_FN   classical_x25519_keypair
-#define KEM_ENCAP_FN     classical_x25519_encap
-#define KEM_DECAP_FN     classical_x25519_decap
-#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_768
-#define KEM_PK_BYTES     32
-#define KEM_SK_BYTES     32
-#define KEM_CT_BYTES     32
-#define KEM_SS_BYTES     32
-#else
-#error "Invalid CRYPTO_MODE"
-#endif
-
-#define KDF_LABEL_KEM_SHARED      "MLKEM-SharedSecret-v1"
-#define KDF_LABEL_PAIRWISE_MASK   "SwiftAgg-PairwiseMask-v1"
-#define KDF_LABEL_STREAM_MASK     "SwiftAgg-StreamMask-v1"
-#define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
-#define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
+#define KEMLIB_ML_KEM_X25519 3
 
 #ifdef __cplusplus
 extern "C" {

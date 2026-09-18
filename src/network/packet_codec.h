@@ -6,7 +6,8 @@
 #include <stddef.h>
 
 #define MAC_SIZE 32
-#define HEADER_SIZE 48
+#define HEADER_SIZE 16
+#define MAC_OFFSET (HEADER_SIZE)
 
 pqc_status_t packet_codec_encode_header(const msg_header_t* hdr, uint8_t* out);
 pqc_status_t packet_codec_decode_header(const uint8_t* in, msg_header_t* hdr);

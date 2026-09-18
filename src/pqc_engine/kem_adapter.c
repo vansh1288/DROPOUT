@@ -5,12 +5,16 @@
 #include <string.h>
 #include <tinycrypt/hmac.h>
 #include <tinycrypt/sha256.h>
+#include <tinycrypt/ecc_dh.h>
+#include <tinycrypt/aes.h>
+#include <tinycrypt/ccm_mode.h>
+#include <tinycrypt/constants.h>
 
-static kem_variant_t g_active_variant = KEM_ACTIVE_VARIANT;
-static size_t g_pk_bytes = KEM_PK_BYTES;
-static size_t g_sk_bytes = KEM_SK_BYTES;
-static size_t g_ct_bytes = KEM_CT_BYTES;
-static size_t g_ss_bytes = KEM_SS_BYTES;
+static kem_variant_t g_active_variant = KEMLIB_ML_KEM_768;
+static size_t g_pk_bytes = ML_KEM_768_PUBLIC_KEY_BYTES;
+static size_t g_sk_bytes = ML_KEM_768_SECRET_KEY_BYTES;
+static size_t g_ct_bytes = ML_KEM_768_CIPHERTEXT_BYTES;
+static size_t g_ss_bytes = ML_KEM_768_SHARED_SECRET_BYTES;
 static uint32_t g_last_cycles = 0;
 
 static void hkdf_extract(const uint8_t* salt, size_t salt_len, const uint8_t* ikm, size_t ikm_len, uint8_t* prk) {
@@ -57,14 +61,6 @@ static void hkdf_expand(const uint8_t* prk, size_t prk_len, const uint8_t* info,
 }
 
 pqc_status_t kem_adapter_init(kem_variant_t variant) {
-#if KEM_ACTIVE_MODE == CRYPTO_MODE_CLASSICAL_X25519
-    (void)variant;
-    g_active_variant = KEMLIB_ML_KEM_768;
-    g_pk_bytes = 32;
-    g_sk_bytes = 32;
-    g_ct_bytes = 32;
-    g_ss_bytes = 32;
-#else
     switch (variant) {
         case KEMLIB_ML_KEM_512:
             g_pk_bytes = ML_KEM_512_PUBLIC_KEY_BYTES;
@@ -84,10 +80,15 @@ pqc_status_t kem_adapter_init(kem_variant_t variant) {
             g_ct_bytes = ML_KEM_1024_CIPHERTEXT_BYTES;
             g_ss_bytes = ML_KEM_1024_SHARED_SECRET_BYTES;
             break;
+        case KEMLIB_ML_KEM_X25519:
+            g_pk_bytes = 32;
+            g_sk_bytes = 32;
+            g_ct_bytes = 32;
+            g_ss_bytes = 32;
+            break;
         default:
             return ERR_INVALID_ARGUMENT;
     }
-#endif
     g_active_variant = variant;
     return PQC_SUCCESS;
 }
@@ -108,8 +109,13 @@ pqc_status_t kem_adapter_get_sizes(size_t* pk_bytes, size_t* sk_bytes, size_t* c
 pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
     if (!keypair) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
-    int ret = KEM_KEYPAIR_FN(keypair->public_key, keypair->secret_key);
-    if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        int ret = uECC_make_key(keypair->public_key, keypair->secret_key, uECC_curve25519());
+        if (ret != TC_CRYPTO_SUCCESS) return ERR_KEM_KEYGEN_FAILED;
+    } else {
+        int ret = KEM_KEYPAIR_FN(keypair->public_key, keypair->secret_key, ws->data);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    }
     keypair->variant = g_active_variant;
     keypair->public_key_len = g_pk_bytes;
     keypair->secret_key_len = g_sk_bytes;
@@ -122,21 +128,67 @@ pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
 pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap) {
     if (!public_key || !encap || pk_len != g_pk_bytes) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
-    int ret = KEM_ENCAP_FN(encap->ciphertext, encap->shared_secret, public_key);
-    if (ret != 0) return ERR_KEM_ENCAP_FAILED;
-    encap->ciphertext_len = g_ct_bytes;
-    encap->shared_secret_len = g_ss_bytes;
-    crypto_zeroize(ws, sizeof(mlkem_workspace_t));
-    return PQC_SUCCESS;
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        uint8_t ephemeral_sk[32];
+        uint8_t ephemeral_pk[32];
+        int ret = uECC_make_key(ephemeral_pk, ephemeral_sk, uECC_curve25519());
+        if (ret != TC_CRYPTO_SUCCESS) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_ENCAP_FAILED;
+        }
+        uint8_t shared_secret[32];
+        if (!uECC_shared_secret(public_key, ephemeral_sk, shared_secret, uECC_curve25519())) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_ENCAP_FAILED;
+        }
+        uint8_t nonce[12];
+        for (int i = 0; i < 12; i++) nonce[i] = 0;
+        struct tc_ccm_mode_struct ccm;
+        tc_ccm_config(&ccm, ephemeral_sk, 32, nonce, 12, NULL, 0);
+        tc_ccm_generation_encryption(encap->ciphertext, 32, encap->shared_secret, 32, &ccm);
+        memcpy(encap->ciphertext + 32, ephemeral_pk, 32);
+        encap->ciphertext_len = g_ct_bytes;
+        encap->shared_secret_len = g_ss_bytes;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        crypto_zeroize(ephemeral_sk, 32);
+        return PQC_SUCCESS;
+    } else {
+        int ret = KEM_ENCAP_FN(encap->ciphertext, encap->shared_secret, public_key, ws->data);
+        if (ret != 0) return ERR_KEM_ENCAP_FAILED;
+        encap->ciphertext_len = g_ct_bytes;
+        encap->shared_secret_len = g_ss_bytes;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    }
 }
 
 pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret) {
     if (!ciphertext || !secret_key || !shared_secret || ct_len != g_ct_bytes || sk_len != g_sk_bytes) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
-    int ret = KEM_DECAP_FN(shared_secret, ciphertext, secret_key);
-    if (ret != 0) return ERR_KEM_DECAP_FAILED;
-    crypto_zeroize(ws, sizeof(mlkem_workspace_t));
-    return PQC_SUCCESS;
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        uint8_t ephemeral_pk[32];
+        memcpy(ephemeral_pk, ciphertext + 32, 32);
+        uint8_t shared[32];
+        if (!uECC_shared_secret(ephemeral_pk, secret_key, shared, uECC_curve25519())) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_DECAP_FAILED;
+        }
+        uint8_t nonce[12];
+        for (int i = 0; i < 12; i++) nonce[i] = 0;
+        struct tc_ccm_mode_struct ccm;
+        tc_ccm_config(&ccm, secret_key, 32, nonce, 12, NULL, 0);
+        if (!tc_ccm_decryption_verification(shared_secret, 32, ciphertext, 32, &ccm)) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_DECAP_FAILED;
+        }
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else {
+        int ret = KEM_DECAP_FN(shared_secret, ciphertext, secret_key, ws->data);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    }
 }
 
 pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key) {
@@ -144,7 +196,7 @@ pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const 
     crypto_workspace_t* ws = scratch_get_crypto_ws();
     uint8_t prk[32];
     hkdf_extract(salt, salt_len, shared_secret, g_ss_bytes, prk);
-    hkdf_expand(prk, 32, (const uint8_t*)KDF_LABEL_SESSION_KEY, strlen(KDF_LABEL_SESSION_KEY), session_key, 32);
+    hkdf_expand(prk, 32, info, info_len, session_key, 32);
     crypto_zeroize(prk, 32);
     crypto_zeroize(ws, sizeof(crypto_workspace_t));
     return PQC_SUCCESS;
@@ -153,17 +205,20 @@ pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const 
 pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret, uint8_t client_id_a, uint8_t client_id_b, uint32_t round_id, uint8_t* mask_seed) {
     if (!shared_secret || !mask_seed) return ERR_INVALID_ARGUMENT;
     crypto_workspace_t* ws = scratch_get_crypto_ws();
-    uint8_t info[64];
+    uint8_t info[80];
     size_t info_len = 0;
-    info[info_len++] = client_id_a;
-    info[info_len++] = client_id_b;
+    const uint8_t* label = (const uint8_t*)KDF_LABEL_PAIRWISE_MASK;
+    size_t label_len = strlen(KDF_LABEL_PAIRWISE_MASK);
+    for (size_t i = 0; i < label_len; i++) info[info_len++] = label[i];
     info[info_len++] = (round_id >> 24) & 0xFF;
     info[info_len++] = (round_id >> 16) & 0xFF;
     info[info_len++] = (round_id >> 8) & 0xFF;
     info[info_len++] = round_id & 0xFF;
+    info[info_len++] = client_id_a;
+    info[info_len++] = client_id_b;
     uint8_t prk[32];
     hkdf_extract(NULL, 0, shared_secret, g_ss_bytes, prk);
-    hkdf_expand(prk, 32, (const uint8_t*)KDF_LABEL_PAIRWISE_MASK, strlen(KDF_LABEL_PAIRWISE_MASK), mask_seed, 32);
+    hkdf_expand(prk, 32, info, info_len, mask_seed, 32);
     crypto_zeroize(prk, 32);
     crypto_zeroize(ws, sizeof(crypto_workspace_t));
     return PQC_SUCCESS;
@@ -172,18 +227,21 @@ pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret,
 pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint8_t* stream_seed) {
     if (!shared_secret || !stream_seed) return ERR_INVALID_ARGUMENT;
     crypto_workspace_t* ws = scratch_get_crypto_ws();
-    uint8_t info[64];
+    uint8_t info[80];
     size_t info_len = 0;
-    info[info_len++] = client_id;
+    const uint8_t* label = (const uint8_t*)KDF_LABEL_STREAM_MASK;
+    size_t label_len = strlen(KDF_LABEL_STREAM_MASK);
+    for (size_t i = 0; i < label_len; i++) info[info_len++] = label[i];
     info[info_len++] = (round_id >> 24) & 0xFF;
     info[info_len++] = (round_id >> 16) & 0xFF;
     info[info_len++] = (round_id >> 8) & 0xFF;
     info[info_len++] = round_id & 0xFF;
+    info[info_len++] = client_id;
     info[info_len++] = (chunk_index >> 8) & 0xFF;
     info[info_len++] = chunk_index & 0xFF;
     uint8_t prk[32];
     hkdf_extract(NULL, 0, shared_secret, g_ss_bytes, prk);
-    hkdf_expand(prk, 32, (const uint8_t*)KDF_LABEL_STREAM_MASK, strlen(KDF_LABEL_STREAM_MASK), stream_seed, 32);
+    hkdf_expand(prk, 32, info, info_len, stream_seed, 32);
     crypto_zeroize(prk, 32);
     crypto_zeroize(ws, sizeof(crypto_workspace_t));
     return PQC_SUCCESS;
@@ -192,16 +250,19 @@ pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, u
 pqc_status_t kem_adapter_derive_shamir_secret(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint8_t* shamir_secret) {
     if (!shared_secret || !shamir_secret) return ERR_INVALID_ARGUMENT;
     crypto_workspace_t* ws = scratch_get_crypto_ws();
-    uint8_t info[64];
+    uint8_t info[80];
     size_t info_len = 0;
-    info[info_len++] = client_id;
+    const uint8_t* label = (const uint8_t*)KDF_LABEL_SHAMIR_SECRET;
+    size_t label_len = strlen(KDF_LABEL_SHAMIR_SECRET);
+    for (size_t i = 0; i < label_len; i++) info[info_len++] = label[i];
     info[info_len++] = (round_id >> 24) & 0xFF;
     info[info_len++] = (round_id >> 16) & 0xFF;
     info[info_len++] = (round_id >> 8) & 0xFF;
     info[info_len++] = round_id & 0xFF;
+    info[info_len++] = client_id;
     uint8_t prk[32];
     hkdf_extract(NULL, 0, shared_secret, g_ss_bytes, prk);
-    hkdf_expand(prk, 32, (const uint8_t*)KDF_LABEL_SHAMIR_SECRET, strlen(KDF_LABEL_SHAMIR_SECRET), shamir_secret, 32);
+    hkdf_expand(prk, 32, info, info_len, shamir_secret, 32);
     crypto_zeroize(prk, 32);
     crypto_zeroize(ws, sizeof(crypto_workspace_t));
     return PQC_SUCCESS;
@@ -285,16 +346,21 @@ uint32_t kem_adapter_get_last_cycles(void) {
 }
 
 pqc_status_t classical_x25519_keypair(uint8_t* pk, uint8_t* sk) {
-    (void)pk; (void)sk;
-    return PQC_SUCCESS;
+    return uECC_make_key(pk, sk, uECC_curve25519()) ? PQC_SUCCESS : ERR_KEM_KEYGEN_FAILED;
 }
 
 pqc_status_t classical_x25519_encap(uint8_t* ct, uint8_t* ss, const uint8_t* pk) {
-    (void)ct; (void)ss; (void)pk;
+    uint8_t ephemeral_sk[32];
+    uint8_t ephemeral_pk[32];
+    if (!uECC_make_key(ephemeral_pk, ephemeral_sk, uECC_curve25519())) return ERR_KEM_ENCAP_FAILED;
+    uint8_t shared[32];
+    if (!uECC_shared_secret(pk, ephemeral_sk, shared, uECC_curve25519())) return ERR_KEM_ENCAP_FAILED;
+    memcpy(ct, ephemeral_pk, 32);
+    for (int i = 0; i < 32; i++) ss[i] = shared[i];
     return PQC_SUCCESS;
 }
 
 pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_t* sk) {
-    (void)ss; (void)ct; (void)sk;
+    if (!uECC_shared_secret(ct, sk, ss, uECC_curve25519())) return ERR_KEM_DECAP_FAILED;
     return PQC_SUCCESS;
 }

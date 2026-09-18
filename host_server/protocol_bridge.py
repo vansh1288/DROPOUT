@@ -32,7 +32,6 @@ MSG_TYPE_DROPOUT_NOTIFY = 0x31
 MSG_TYPE_RECOVERY_COMPLETE = 0x33
 MSG_TYPE_ROUND_COMPLETE = 0x41
 
-DEFAULT_CHUNK_ELEMENTS = 128
 HEADER_FORMAT = ">IIBBHHH"
 HEADER_SIZE = 16
 
@@ -64,6 +63,7 @@ class ClientState:
     completed: bool = False
     pairwise_seeds: Dict[int, bytes] = field(default_factory=dict)
     stream_seeds: Dict[int, bytes] = field(default_factory=dict)
+    sample_count: int = 0
 
 @dataclass
 class RoundState:
@@ -146,7 +146,7 @@ class ProtocolBridge:
         elif header.message_type == MSG_TYPE_MASK_CHUNK:
             await self._handle_mask_chunk(header, payload)
         elif header.message_type == MSG_TYPE_CLIENT_COMPLETE:
-            await self._handle_client_complete(header)
+            await self._handle_client_complete(header, payload)
         elif header.message_type == MSG_TYPE_DROPOUT_NOTIFY:
             await self._handle_dropout_notify(header, payload)
         elif header.message_type == MSG_TYPE_ROUND_INIT:
@@ -201,12 +201,14 @@ class ProtocolBridge:
             return
         client_state.received_chunks[header.sequence_number] = payload
 
-    async def _handle_client_complete(self, header: MessageHeader):
+    async def _handle_client_complete(self, header: MessageHeader, payload: bytes):
         round_state = self.rounds.get(header.round_id)
         if not round_state:
             return
         client_state = round_state.clients.get(header.client_id)
         if client_state:
+            if len(payload) >= 4:
+                client_state.sample_count = int.from_bytes(payload[:4], "big")
             client_state.completed = True
             await self._check_round_completion(round_state)
 
@@ -310,8 +312,8 @@ class ProtocolBridge:
         )
         surviving = round_state.expected_clients - len(round_state.dropout_clients)
         if completed >= surviving and surviving >= round_state.threshold:
-            round_state.stage = "AGGREGATION"
-            await self._aggregate_and_broadcast(round_state)
+            round_state.stage = "UNMASKING"
+            await self._unmask_and_aggregate(round_state)
         elif surviving < round_state.threshold:
             round_state.stage = "ERROR"
             await self._handle_round_failure(round_state)
@@ -385,17 +387,19 @@ class ProtocolBridge:
 
         return unmasked_chunks
 
-    async def _aggregate_and_broadcast(self, round_state: RoundState):
+    async def _unmask_and_aggregate(self, round_state: RoundState):
         await self._setup_keys_and_masks(round_state)
         await self._trigger_recovery(round_state)
         unmasked_chunks = self._unmask_aggregated_chunks(round_state)
-        round_state.unmasked_chunks = unmasked_chunks
+        fedavg_chunks = self._compute_fedavg(round_state, unmasked_chunks)
+        round_state.unmasked_chunks = fedavg_chunks
+        round_state.stage = "ROUND_COMPLETE"
 
         for client_id, writer in self.client_writers.items():
             for seq_num in range(round_state.model_size // round_state.chunk_size):
                 chunk_elements = round_state.chunk_size
                 result = struct.pack(
-                    f">{chunk_elements}h", *unmasked_chunks[seq_num]
+                    f">{chunk_elements}h", *fedavg_chunks[seq_num]
                 )
                 header = self._build_header(
                     MSG_TYPE_ROUND_COMPLETE,
@@ -406,3 +410,29 @@ class ProtocolBridge:
                 )
                 writer.write(header + result)
                 await writer.drain()
+
+    def _compute_fedavg(self, round_state: RoundState, unmasked_chunks: Dict[int, List[int]]) -> Dict[int, List[int]]:
+        total_samples = sum(c.sample_count for c in round_state.clients.values() if c.completed and c.sample_count > 0)
+        if total_samples == 0:
+            total_samples = sum(1 for c in round_state.clients.values() if c.completed)
+        num_chunks = round_state.model_size // round_state.chunk_size
+        chunk_elements = round_state.chunk_size
+        fedavg_chunks: Dict[int, List[int]] = {}
+        for i in range(num_chunks):
+            fedavg_chunks[i] = [0] * chunk_elements
+        for client_id, client_state in round_state.clients.items():
+            if not client_state.completed or client_id in round_state.dropout_clients:
+                continue
+            weight = client_state.sample_count if client_state.sample_count > 0 else 1
+            for seq_num in range(num_chunks):
+                if seq_num not in client_state.received_chunks:
+                    continue
+                values = struct.unpack(f">{chunk_elements}h", client_state.received_chunks[seq_num])
+                for j, val in enumerate(values):
+                    fedavg_chunks[seq_num][j] = (fedavg_chunks[seq_num][j] + val * weight) % FIELD_MODULUS
+        if total_samples > 1:
+            inv_total = pow(total_samples, FIELD_MODULUS - 2, FIELD_MODULUS)
+            for seq_num in range(num_chunks):
+                for j in range(chunk_elements):
+                    fedavg_chunks[seq_num][j] = (fedavg_chunks[seq_num][j] * inv_total) % FIELD_MODULUS
+        return fedavg_chunks
