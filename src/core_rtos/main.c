@@ -6,6 +6,7 @@
 #include "stream_aggregator.h"
 #include "dma_transport.h"
 #include "state_machine.h"
+#include "telemetry.h"
 #include <string.h>
 
 union Global_Scratchpad g_scratchpad;
@@ -57,25 +58,45 @@ static void crypto_worker_task(void* pvParameters) {
         uint32_t notify = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (notify & 0x01) {
             if (g_crypto_work.op == CRYPTO_OP_KEYPAIR && g_crypto_work.keypair_out) {
+                telemetry_cycle_start();
                 kem_adapter_keypair(g_crypto_work.keypair_out);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(cycles, 0, 0, 0, 0, 0);
+                }
                 if (g_crypto_work.done_flag) *g_crypto_work.done_flag = pdTRUE;
             }
         }
         if (notify & 0x02) {
             if (g_crypto_work.op == CRYPTO_OP_ENCAPSULATE && g_crypto_work.public_key && g_crypto_work.encap_out) {
+                telemetry_cycle_start();
                 kem_adapter_encapsulate(g_crypto_work.public_key, g_crypto_work.pk_len, g_crypto_work.encap_out);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(0, cycles, 0, 0, 0, 0);
+                }
                 if (g_crypto_work.done_flag) *g_crypto_work.done_flag = pdTRUE;
             }
         }
         if (notify & 0x04) {
             if (g_crypto_work.op == CRYPTO_OP_DECAPSULATE && g_crypto_work.ciphertext && g_crypto_work.secret_key && g_crypto_work.shared_secret_out) {
+                telemetry_cycle_start();
                 kem_adapter_decapsulate(g_crypto_work.ciphertext, g_crypto_work.ct_len, g_crypto_work.secret_key, g_crypto_work.sk_len, g_crypto_work.shared_secret_out);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(0, 0, cycles, 0, 0, 0);
+                }
                 if (g_crypto_work.done_flag) *g_crypto_work.done_flag = pdTRUE;
             }
         }
         if (notify & 0x08) {
             if (g_crypto_work.op == CRYPTO_OP_HKDF && g_crypto_work.shared_secret_in && g_crypto_work.session_key_out) {
+                telemetry_cycle_start();
                 kem_adapter_derive_session_key(g_crypto_work.shared_secret_in, g_crypto_work.salt, g_crypto_work.salt_len, g_crypto_work.info, g_crypto_work.info_len, g_crypto_work.session_key_out);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(0, 0, 0, cycles, 0, 0);
+                }
                 if (g_crypto_work.done_flag) *g_crypto_work.done_flag = pdTRUE;
             }
         }
@@ -97,12 +118,22 @@ static void stream_aggregator_task(void* pvParameters) {
         uint32_t notify = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         if (notify & 0x01) {
             if (g_stream_op == 1) {
+                telemetry_cycle_start();
                 stream_aggregator_process_chunk(g_stream_work.client_id, g_stream_work.round_id, g_stream_work.chunk_index, g_stream_work.chunk_size);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(0, 0, 0, 0, cycles, 0);
+                }
             }
         }
         if (notify & 0x02) {
             if (g_stream_op == 2) {
+                telemetry_cycle_start();
                 stream_aggregator_unmask_chunk(g_stream_work.client_id, g_stream_work.round_id, g_stream_work.chunk_index, g_stream_work.chunk_size);
+                uint32_t cycles = telemetry_cycle_end();
+                if (g_telemetry_session.round_count > 0) {
+                    telemetry_record_crypto(0, 0, 0, 0, 0, cycles);
+                }
             }
         }
     }
@@ -148,6 +179,8 @@ static void state_monitor_task(void* pvParameters) {
 
 void app_main(void) {
     memset(&g_scratchpad, 0, sizeof(union Global_Scratchpad));
+
+    telemetry_init();
 
     xTaskCreateStatic(crypto_worker_task, "crypto_worker", 1024, NULL, 3, crypto_stack, &crypto_tcb);
     xTaskCreateStatic(stream_aggregator_task, "stream_aggregator", 1024, NULL, 2, stream_stack, &stream_tcb);

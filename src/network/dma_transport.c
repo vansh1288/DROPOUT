@@ -2,6 +2,7 @@
 #include "protocol_types.h"
 #include "dma_isr_handler.h"
 #include "transport.h"
+#include "impairment.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -11,6 +12,7 @@ static int g_rx_sock = -1;
 static int g_tx_sock = -1;
 static uint8_t g_dma_rx_pending = 0;
 static uint8_t g_dma_tx_pending = 0;
+static impairment_config_t g_impairment_config = {0};
 
 pqc_status_t dma_transport_init(int rx_sock, int tx_sock) {
     g_rx_sock = rx_sock;
@@ -18,6 +20,13 @@ pqc_status_t dma_transport_init(int rx_sock, int tx_sock) {
     g_dma_rx_pending = 0;
     g_dma_tx_pending = 0;
     dma_isr_init();
+    impairment_init(&g_impairment_config);
+    return PQC_SUCCESS;
+}
+
+pqc_status_t dma_transport_set_impairment(const impairment_config_t* config) {
+    if (!config) return ERR_INVALID_ARGUMENT;
+    impairment_init(config);
     return PQC_SUCCESS;
 }
 
@@ -25,7 +34,7 @@ pqc_status_t dma_transport_rx_poll(void) {
     if (g_rx_sock < 0 || g_dma_rx_pending) return ERR_INVALID_STATE;
     uint8_t* buf = dma_get_rx_buffer();
     size_t received;
-    pqc_status_t ret = transport_recv(g_rx_sock, buf, DMA_CHUNK_SIZE, &received);
+    pqc_status_t ret = impairment_recv(g_rx_sock, buf, DMA_CHUNK_SIZE, &received);
     if (ret == PQC_SUCCESS && received > 0) {
         g_dma_rx_pending = 1;
         dma_isr_rx_complete();
@@ -37,7 +46,7 @@ pqc_status_t dma_transport_tx_poll(void) {
     if (g_tx_sock < 0 || !g_dma_tx_pending) return ERR_INVALID_STATE;
     uint8_t* buf = dma_get_tx_buffer();
     size_t sent;
-    pqc_status_t ret = transport_send(g_tx_sock, buf, DMA_CHUNK_SIZE, &sent);
+    pqc_status_t ret = impairment_send(g_tx_sock, buf, DMA_CHUNK_SIZE, &sent);
     if (ret == PQC_SUCCESS) {
         g_dma_tx_pending = 0;
         dma_isr_tx_complete();

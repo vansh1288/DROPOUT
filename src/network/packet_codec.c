@@ -3,8 +3,9 @@
 #include <tinycrypt/sha256.h>
 #include <string.h>
 
-#define HEADER_SIZE 16
+#define HEADER_SIZE 48
 #define MAC_SIZE 32
+#define MAC_OFFSET 16
 
 static void build_mac_data(const msg_header_t* hdr, uint8_t* mac_data) {
     mac_data[0] = (hdr->protocol_version >> 24) & 0xFF;
@@ -75,25 +76,37 @@ pqc_status_t packet_codec_verify_mac(const uint8_t* key, const uint8_t* data, si
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_encode_message(const msg_header_t* hdr, const uint8_t* payload, uint8_t* out, size_t* out_len) {
-    if (!hdr || !out || !out_len) return ERR_INVALID_ARGUMENT;
+pqc_status_t packet_codec_encode_message(const msg_header_t* hdr, const uint8_t* payload, const uint8_t* mac_key, uint8_t* out, size_t* out_len) {
+    if (!hdr || !out || !out_len || !mac_key) return ERR_INVALID_ARGUMENT;
     if (hdr->payload_length > 0 && !payload) return ERR_INVALID_ARGUMENT;
     pqc_status_t ret = packet_codec_encode_header(hdr, out);
     if (ret != PQC_SUCCESS) return ret;
     if (hdr->payload_length > 0) {
-        memcpy(out + HEADER_SIZE, payload, hdr->payload_length);
+        memcpy(out + HEADER_SIZE - MAC_SIZE, payload, hdr->payload_length);
     }
+    uint8_t mac_data[12];
+    build_mac_data(hdr, mac_data);
+    uint8_t mac[MAC_SIZE];
+    ret = packet_codec_compute_mac(mac_key, mac_data, 12, mac);
+    if (ret != PQC_SUCCESS) return ret;
+    memcpy(out + MAC_OFFSET, mac, MAC_SIZE);
     *out_len = HEADER_SIZE + hdr->payload_length;
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_decode_message(const uint8_t* in, size_t in_len, msg_header_t* hdr, uint8_t* payload, size_t* payload_len) {
-    if (!in || !hdr || in_len < HEADER_SIZE) return ERR_INVALID_ARGUMENT;
+pqc_status_t packet_codec_decode_message(const uint8_t* in, size_t in_len, const uint8_t* mac_key, msg_header_t* hdr, uint8_t* payload, size_t* payload_len) {
+    if (!in || !hdr || !mac_key || in_len < HEADER_SIZE) return ERR_INVALID_ARGUMENT;
     pqc_status_t ret = packet_codec_decode_header(in, hdr);
     if (ret != PQC_SUCCESS) return ret;
     if (in_len < HEADER_SIZE + hdr->payload_length) return ERR_INVALID_ARGUMENT;
+    uint8_t mac_data[12];
+    build_mac_data(hdr, mac_data);
+    uint8_t received_mac[MAC_SIZE];
+    memcpy(received_mac, in + MAC_OFFSET, MAC_SIZE);
+    ret = packet_codec_verify_mac(mac_key, mac_data, 12, received_mac);
+    if (ret != PQC_SUCCESS) return ret;
     if (hdr->payload_length > 0 && payload) {
-        memcpy(payload, in + HEADER_SIZE, hdr->payload_length);
+        memcpy(payload, in + HEADER_SIZE - MAC_SIZE, hdr->payload_length);
     }
     if (payload_len) *payload_len = hdr->payload_length;
     return PQC_SUCCESS;

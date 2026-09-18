@@ -32,8 +32,7 @@ MSG_TYPE_DROPOUT_NOTIFY = 0x31
 MSG_TYPE_RECOVERY_COMPLETE = 0x33
 MSG_TYPE_ROUND_COMPLETE = 0x41
 
-CHUNK_ELEMENTS = 128
-CHUNK_BYTES = CHUNK_ELEMENTS * 2
+DEFAULT_CHUNK_ELEMENTS = 128
 HEADER_FORMAT = ">IIBBHHH"
 HEADER_SIZE = 16
 
@@ -197,7 +196,8 @@ class ProtocolBridge:
         client_state = round_state.clients.get(header.client_id)
         if not client_state:
             return
-        if len(payload) != CHUNK_BYTES:
+        expected_chunk_bytes = round_state.chunk_size * 2
+        if len(payload) != expected_chunk_bytes:
             return
         client_state.received_chunks[header.sequence_number] = payload
 
@@ -216,6 +216,7 @@ class ProtocolBridge:
             return
         if header.client_id not in round_state.dropout_clients:
             round_state.dropout_clients.append(header.client_id)
+        await self._trigger_recovery(round_state)
         await self._check_round_completion(round_state)
 
     def _hkdf_extract(self, salt: bytes, ikm: bytes) -> bytes:
@@ -265,7 +266,7 @@ class ProtocolBridge:
             raise RuntimeError("cryptography library not available")
         cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
         encryptor = cipher.encryptor()
-        return encryptor.update(b"\x00" * length) + encryptor.finalize()
+        return encryptor.update(b" " * length) + encryptor.finalize()
 
     def _generate_mask_from_seed(self, seed: bytes, length: int) -> List[int]:
         stream = self._aes_ctr_stream(seed, bytes(16), length)
@@ -344,9 +345,10 @@ class ProtocolBridge:
 
     def _unmask_aggregated_chunks(self, round_state: RoundState) -> Dict[int, List[int]]:
         num_chunks = round_state.model_size // round_state.chunk_size
+        chunk_elements = round_state.chunk_size
         unmasked_chunks: Dict[int, List[int]] = {}
         for i in range(num_chunks):
-            unmasked_chunks[i] = [0] * CHUNK_ELEMENTS
+            unmasked_chunks[i] = [0] * chunk_elements
 
         for client_id, client_state in round_state.clients.items():
             if client_id in round_state.dropout_clients:
@@ -354,7 +356,7 @@ class ProtocolBridge:
             for seq_num, chunk_data in client_state.received_chunks.items():
                 if seq_num >= num_chunks:
                     continue
-                values = struct.unpack(f">{CHUNK_ELEMENTS}h", chunk_data)
+                values = struct.unpack(f">{chunk_elements}h", chunk_data)
                 for i, val in enumerate(values):
                     unmasked_chunks[seq_num][i] = (
                         unmasked_chunks[seq_num][i] + val
@@ -364,36 +366,36 @@ class ProtocolBridge:
             dropout_state = round_state.clients.get(dropout_id)
             if not dropout_state or not dropout_state.shared_secret:
                 continue
-            for peer_id, peer_state in round_state.clients.items():
-                if peer_id == dropout_id:
-                    continue
-                if not peer_state.shared_secret:
-                    continue
-                seed = self._derive_pairwise_seed(
-                    dropout_state.shared_secret,
-                    min(dropout_id, peer_id),
-                    max(dropout_id, peer_id),
-                    round_state.round_id
-                )
-                mask = self._generate_mask_from_seed(seed, CHUNK_BYTES)
-                sign = 1 if dropout_id < peer_id else -1
-                for seq_num in range(num_chunks):
-                    for i in range(CHUNK_ELEMENTS):
+            all_peer_ids = [cid for cid in round_state.clients.keys() if cid != dropout_id]
+            from shamir_recovery import recover_dropped_client_masks
+            recovered_masks = recover_dropped_client_masks(
+                dropout_state.shared_secret,
+                round_state.round_id,
+                all_peer_ids,
+                dropout_id,
+                num_chunks,
+                chunk_elements
+            )
+            for seq_num in range(num_chunks):
+                if seq_num in recovered_masks:
+                    for i in range(chunk_elements):
                         unmasked_chunks[seq_num][i] = (
-                            unmasked_chunks[seq_num][i] + sign * mask[i]
+                            unmasked_chunks[seq_num][i] + recovered_masks[seq_num][i]
                         ) % FIELD_MODULUS
 
         return unmasked_chunks
 
     async def _aggregate_and_broadcast(self, round_state: RoundState):
         await self._setup_keys_and_masks(round_state)
+        await self._trigger_recovery(round_state)
         unmasked_chunks = self._unmask_aggregated_chunks(round_state)
         round_state.unmasked_chunks = unmasked_chunks
 
         for client_id, writer in self.client_writers.items():
             for seq_num in range(round_state.model_size // round_state.chunk_size):
+                chunk_elements = round_state.chunk_size
                 result = struct.pack(
-                    f">{CHUNK_ELEMENTS}h", *unmasked_chunks[seq_num]
+                    f">{chunk_elements}h", *unmasked_chunks[seq_num]
                 )
                 header = self._build_header(
                     MSG_TYPE_ROUND_COMPLETE,

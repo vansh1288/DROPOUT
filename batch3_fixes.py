@@ -1,4 +1,145 @@
-#include "kem_adapter.h"
+import os
+import subprocess
+
+def create_init_deps():
+    path = r"C:\DROP\scripts\init_deps.py"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    content = '''import subprocess
+import sys
+
+def run_cmd(cmd, cwd=None):
+    result = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Error: {result.stderr}")
+        return False
+    print(result.stdout)
+    return True
+
+if __name__ == "__main__":
+    repo_root = r"C:\DROP"
+    if not run_cmd("git submodule add https://github.com/mupq/pqm4 deps/pqm4", cwd=repo_root):
+        sys.exit(1)
+    if not run_cmd("git submodule update --init --recursive", cwd=repo_root):
+        sys.exit(1)
+    print("Dependencies initialized successfully")
+'''
+    with open(path, "w") as f:
+        f.write(content)
+    print(f"Created {path}")
+
+def fix_kem_adapter_h():
+    path = r"C:\DROP\src\pqc_engine\kem_adapter.h"
+    content = '''#ifndef KEM_ADAPTER_H
+#define KEM_ADAPTER_H
+
+#include "protocol_types.h"
+#include "memory_scratchpad.h"
+#include <stdint.h>
+#include <stddef.h>
+
+#define KEM_ADAPTER_MAX_PK_BYTES   ML_KEM_1024_PUBLIC_KEY_BYTES
+#define KEM_ADAPTER_MAX_SK_BYTES   ML_KEM_1024_SECRET_KEY_BYTES
+#define KEM_ADAPTER_MAX_CT_BYTES   ML_KEM_1024_CIPHERTEXT_BYTES
+#define KEM_ADAPTER_SS_BYTES       ML_KEM_1024_SHARED_SECRET_BYTES
+
+#define KDF_LABEL_KEM_SHARED      "MLKEM-SharedSecret-v1"
+#define KDF_LABEL_PAIRWISE_MASK   "SwiftAgg-PairwiseMask-v1"
+#define KDF_LABEL_STREAM_MASK     "SwiftAgg-StreamMask-v1"
+#define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
+#define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
+
+#define CRYPTO_MODE_PQC_ML_KEM_512   0
+#define CRYPTO_MODE_PQC_ML_KEM_768   1
+#define CRYPTO_MODE_PQC_ML_KEM_1024  2
+#define CRYPTO_MODE_CLASSICAL_X25519 3
+
+#ifdef CRYPTO_MODE
+#define KEM_ACTIVE_MODE CRYPTO_MODE
+#else
+#define KEM_ACTIVE_MODE CRYPTO_MODE_PQC_ML_KEM_768
+#endif
+
+#if KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_512
+#define KEM_KEYPAIR_FN   pqcrystals_kyber512_ref_keypair
+#define KEM_ENCAP_FN     pqcrystals_kyber512_ref_enc
+#define KEM_DECAP_FN     pqcrystals_kyber512_ref_dec
+#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_512
+#define KEM_PK_BYTES     ML_KEM_512_PUBLIC_KEY_BYTES
+#define KEM_SK_BYTES     ML_KEM_512_SECRET_KEY_BYTES
+#define KEM_CT_BYTES     ML_KEM_512_CIPHERTEXT_BYTES
+#define KEM_SS_BYTES     ML_KEM_512_SHARED_SECRET_BYTES
+#elif KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_768
+#define KEM_KEYPAIR_FN   pqcrystals_kyber768_ref_keypair
+#define KEM_ENCAP_FN     pqcrystals_kyber768_ref_enc
+#define KEM_DECAP_FN     pqcrystals_kyber768_ref_dec
+#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_768
+#define KEM_PK_BYTES     ML_KEM_768_PUBLIC_KEY_BYTES
+#define KEM_SK_BYTES     ML_KEM_768_SECRET_KEY_BYTES
+#define KEM_CT_BYTES     ML_KEM_768_CIPHERTEXT_BYTES
+#define KEM_SS_BYTES     ML_KEM_768_SHARED_SECRET_BYTES
+#elif KEM_ACTIVE_MODE == CRYPTO_MODE_PQC_ML_KEM_1024
+#define KEM_KEYPAIR_FN   pqcrystals_kyber1024_ref_keypair
+#define KEM_ENCAP_FN     pqcrystals_kyber1024_ref_enc
+#define KEM_DECAP_FN     pqcrystals_kyber1024_ref_dec
+#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_1024
+#define KEM_PK_BYTES     ML_KEM_1024_PUBLIC_KEY_BYTES
+#define KEM_SK_BYTES     ML_KEM_1024_SECRET_KEY_BYTES
+#define KEM_CT_BYTES     ML_KEM_1024_CIPHERTEXT_BYTES
+#define KEM_SS_BYTES     ML_KEM_1024_SHARED_SECRET_BYTES
+#elif KEM_ACTIVE_MODE == CRYPTO_MODE_CLASSICAL_X25519
+#define KEM_KEYPAIR_FN   classical_x25519_keypair
+#define KEM_ENCAP_FN     classical_x25519_encap
+#define KEM_DECAP_FN     classical_x25519_decap
+#define KEM_ACTIVE_VARIANT KEMLIB_ML_KEM_768
+#define KEM_PK_BYTES     32
+#define KEM_SK_BYTES     32
+#define KEM_CT_BYTES     32
+#define KEM_SS_BYTES     32
+#else
+#error "Invalid CRYPTO_MODE"
+#endif
+
+#define KDF_LABEL_KEM_SHARED      "MLKEM-SharedSecret-v1"
+#define KDF_LABEL_PAIRWISE_MASK   "SwiftAgg-PairwiseMask-v1"
+#define KDF_LABEL_STREAM_MASK     "SwiftAgg-StreamMask-v1"
+#define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
+#define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+pqc_status_t kem_adapter_init(kem_variant_t variant);
+kem_variant_t kem_adapter_get_variant(void);
+pqc_status_t kem_adapter_get_sizes(size_t* pk_bytes, size_t* sk_bytes, size_t* ct_bytes, size_t* ss_bytes);
+pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair);
+pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap);
+pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret);
+pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key);
+pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret, uint8_t client_id_a, uint8_t client_id_b, uint32_t round_id, uint8_t* mask_seed);
+pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint8_t* stream_seed);
+pqc_status_t kem_adapter_derive_shamir_secret(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint8_t* shamir_secret);
+pqc_status_t kem_adapter_zeroize_scratchpad(void);
+pqc_status_t kem_adapter_self_test(void);
+uint32_t kem_adapter_get_last_cycles(void);
+
+pqc_status_t classical_x25519_keypair(uint8_t* pk, uint8_t* sk);
+pqc_status_t classical_x25519_encap(uint8_t* ct, uint8_t* ss, const uint8_t* pk);
+pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_t* sk);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+'''
+    with open(path, "w") as f:
+        f.write(content)
+    print("Fixed kem_adapter.h")
+
+def fix_kem_adapter_c():
+    path = r"C:\DROP\src\pqc_engine\kem_adapter.c"
+    content = '''#include "kem_adapter.h"
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "crypto_memory.h"
@@ -298,3 +439,130 @@ pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_
     (void)ss; (void)ct; (void)sk;
     return PQC_SUCCESS;
 }
+'''
+    with open(path, "w") as f:
+        f.write(content)
+    print("Fixed kem_adapter.c")
+
+def fix_dma_transport():
+    path = r"C:\DROP\src\network\dma_transport.c"
+    content = '''#include "memory_scratchpad.h"
+#include "protocol_types.h"
+#include "dma_isr_handler.h"
+#include "transport.h"
+#include "impairment.h"
+#include <stdint.h>
+#include <string.h>
+
+#define DMA_CHUNK_SIZE 256
+
+static int g_rx_sock = -1;
+static int g_tx_sock = -1;
+static uint8_t g_dma_rx_pending = 0;
+static uint8_t g_dma_tx_pending = 0;
+static impairment_config_t g_impairment_config = {0};
+
+pqc_status_t dma_transport_init(int rx_sock, int tx_sock) {
+    g_rx_sock = rx_sock;
+    g_tx_sock = tx_sock;
+    g_dma_rx_pending = 0;
+    g_dma_tx_pending = 0;
+    dma_isr_init();
+    impairment_init(&g_impairment_config);
+    return PQC_SUCCESS;
+}
+
+pqc_status_t dma_transport_set_impairment(const impairment_config_t* config) {
+    if (!config) return ERR_INVALID_ARGUMENT;
+    impairment_init(config);
+    return PQC_SUCCESS;
+}
+
+pqc_status_t dma_transport_rx_poll(void) {
+    if (g_rx_sock < 0 || g_dma_rx_pending) return ERR_INVALID_STATE;
+    uint8_t* buf = dma_get_rx_buffer();
+    size_t received;
+    pqc_status_t ret = impairment_recv(g_rx_sock, buf, DMA_CHUNK_SIZE, &received);
+    if (ret == PQC_SUCCESS && received > 0) {
+        g_dma_rx_pending = 1;
+        dma_isr_rx_complete();
+    }
+    return ret;
+}
+
+pqc_status_t dma_transport_tx_poll(void) {
+    if (g_tx_sock < 0 || !g_dma_tx_pending) return ERR_INVALID_STATE;
+    uint8_t* buf = dma_get_tx_buffer();
+    size_t sent;
+    pqc_status_t ret = impairment_send(g_tx_sock, buf, DMA_CHUNK_SIZE, &sent);
+    if (ret == PQC_SUCCESS) {
+        g_dma_tx_pending = 0;
+        dma_isr_tx_complete();
+    }
+    return ret;
+}
+
+pqc_status_t dma_transport_queue_tx(const uint8_t* data, size_t len) {
+    if (!data || len > DMA_CHUNK_SIZE || g_dma_tx_pending) return ERR_INVALID_ARGUMENT;
+    uint8_t* buf = dma_get_tx_buffer();
+    memcpy(buf, data, len);
+    g_dma_tx_pending = 1;
+    return PQC_SUCCESS;
+}
+
+pqc_status_t dma_transport_get_rx_data(uint8_t* out, size_t* len) {
+    if (!out || !len || !g_dma_rx_pending) return ERR_INVALID_STATE;
+    uint8_t* buf = dma_get_rx_buffer();
+    *len = DMA_CHUNK_SIZE;
+    memcpy(out, buf, DMA_CHUNK_SIZE);
+    g_dma_rx_pending = 0;
+    return PQC_SUCCESS;
+}
+
+void dma_transport_rx_complete_callback(void) {
+    g_dma_rx_pending = 0;
+}
+
+void dma_transport_tx_complete_callback(void) {
+    g_dma_tx_pending = 0;
+}
+'''
+    with open(path, "w") as f:
+        f.write(content)
+    print("Fixed dma_transport.c")
+
+def run_init_deps():
+    try:
+        result = subprocess.run(
+            ["git", "submodule", "add", "https://github.com/mupq/pqm4", "deps/pqm4"],
+            cwd=r"C:\DROP",
+            capture_output=True,
+            text=True,
+            shell=True
+        )
+        if result.returncode != 0:
+            print(f"git submodule add failed: {result.stderr}")
+        else:
+            print(result.stdout)
+        
+        result = subprocess.run(
+            ["git", "submodule", "update", "--init", "--recursive"],
+            cwd=r"C:\DROP",
+            capture_output=True,
+            text=True,
+            shell=True
+        )
+        if result.returncode != 0:
+            print(f"git submodule update failed: {result.stderr}")
+        else:
+            print(result.stdout)
+    except Exception as e:
+        print(f"Error running git commands: {e}")
+
+if __name__ == "__main__":
+    create_init_deps()
+    fix_kem_adapter_h()
+    fix_kem_adapter_c()
+    fix_dma_transport()
+    run_init_deps()
+    print("Batch 3 modifications completed successfully.")

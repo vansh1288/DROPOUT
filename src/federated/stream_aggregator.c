@@ -1,6 +1,7 @@
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "mask_prg.h"
+#include "kem_adapter.h"
 #include <stdint.h>
 
 #define KYBER_Q 3329
@@ -12,17 +13,16 @@ static inline uint16_t barrett_reduce_q(uint32_t a) {
     return r >= KYBER_Q ? r - KYBER_Q : r;
 }
 
-pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size) {
+pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
     if (chunk_size > CHUNK_ELEMENTS * 2) return ERR_CHUNK_TOO_LARGE;
     if (chunk_size % 2 != 0) return ERR_CHUNK_TOO_SMALL;
 
     chunk_buffer_t* chunk_buf = scratch_get_chunk_buf();
     dma_double_buffer_t* dma_tx = scratch_get_dma_tx();
-    mlkem_workspace_t* mlkem_ws = scratch_get_mlkem_ws();
 
     uint8_t stream_seed[32];
     pqc_status_t ret = kem_adapter_derive_stream_mask_seed(
-        (uint8_t*)mlkem_ws, client_id, round_id, chunk_index, stream_seed
+        shared_secret, client_id, round_id, chunk_index, stream_seed
     );
     if (ret != PQC_SUCCESS) return ret;
 
@@ -44,17 +44,16 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
     return PQC_SUCCESS;
 }
 
-pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size) {
+pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
     if (chunk_size > CHUNK_ELEMENTS * 2) return ERR_CHUNK_TOO_LARGE;
     if (chunk_size % 2 != 0) return ERR_CHUNK_TOO_SMALL;
 
     chunk_buffer_t* chunk_buf = scratch_get_chunk_buf();
     dma_double_buffer_t* dma_tx = scratch_get_dma_tx();
-    mlkem_workspace_t* mlkem_ws = scratch_get_mlkem_ws();
 
     uint8_t stream_seed[32];
     pqc_status_t ret = kem_adapter_derive_stream_mask_seed(
-        (uint8_t*)mlkem_ws, client_id, round_id, chunk_index, stream_seed
+        shared_secret, client_id, round_id, chunk_index, stream_seed
     );
     if (ret != PQC_SUCCESS) return ret;
 

@@ -1,0 +1,72 @@
+using sysbus = Renode.Peripherals.Bus.Bus
+using switch = Renode.Networking.Switch
+using emulator = Renode.Core.Emulator
+using cpu = Renode.Peripherals.CPU.CortexM
+using machine = Renode.Peripherals.MachineRegistration
+using gpio = Renode.Peripherals.GPIOPort
+using uart = Renode.Peripherals.UART
+using timer = Renode.Peripherals.Timers.SysTick
+using flash = Renode.Peripherals.Flash
+using network = Renode.Networking
+
+$bin = @C:\DROPuild\cortex_m4irmware.elf
+
+emulator SetGlobalQuantum "100000"
+
+$num_nodes = 3
+
+$switch = switch.CreateSwitch()
+$switch.Name = "virtual_switch"
+
+for $i in 0..($num_nodes - 1)
+    $node_name = sprintf("node%d", $i)
+    emu $node_name = emulator.Create()
+    $node_name.LoadPlatformDescription(@platforms/cpus/cortex_m4_nucleo_f446re.repl)
+    $node_name.SetMachineName($node_name)
+    
+    $node_name.LoadBinary($bin)
+    
+    $node_name.Machine.RegisterEmailNotifier("renode")
+    
+    $node_name.Sysbus.usart2.Connect($switch)
+    
+    $node_name.Sysbus.gpiob.Pin9.Connect($node_name.Sysbus.led1)
+    $node_name.Sysbus.gpiob.Pin14.Connect($node_name.Sysbus.led2)
+    
+    $node_name.CPU.Configure("0x08000000", "0x20000000", "0x10000", "0x1000")
+    $node_name.CPU.SetRegister("PC", "0x08000004")
+    $node_name.CPU.SetRegister("SP", "0x20020000")
+    
+    $node_name.Start()
+end
+
+$switch.Enable()
+$switch.SetPromiscuousMode(true)
+
+for $i in 0..($num_nodes - 1)
+    $node_name = sprintf("node%d", $i)
+    emu $node_name.PrintCPUInfo()
+end
+
+macro start_all()
+    for $i in 0..($num_nodes - 1)
+        $node_name = sprintf("node%d", $i)
+        emu $node_name.Start()
+    end
+end
+
+macro pause_all()
+    for $i in 0..($num_nodes - 1)
+        $node_name = sprintf("node%d", $i)
+        emu $node_name.Pause()
+    end
+end
+
+macro reset_all()
+    for $i in 0..($num_nodes - 1)
+        $node_name = sprintf("node%d", $i)
+        emu $node_name.Reset()
+    end
+end
+
+print "Multi-node emulation ready. Use 'start_all' to begin."

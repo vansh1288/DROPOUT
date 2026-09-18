@@ -1,4 +1,6 @@
 import secrets
+import hmac
+import hashlib
 from typing import List, Tuple, Dict
 
 try:
@@ -93,6 +95,22 @@ def reconstruct_secret_bytes(shares: List[Tuple[int, bytes]]) -> bytes:
     
     return bytes(secret_bytes)
 
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    if not salt:
+        salt = bytes(32)
+    return hmac.new(salt, ikm, hashlib.sha256).digest()
+
+def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
+    okm = b""
+    t = b""
+    ctr = 1
+    while len(okm) < length:
+        h = hmac.new(prk, t + info + bytes([ctr]), hashlib.sha256)
+        t = h.digest()
+        okm += t
+        ctr += 1
+    return okm[:length]
+
 def aes_ctr_stream(key: bytes, nonce: bytes, length: int) -> bytes:
     if not CRYPTO_AVAILABLE:
         raise RuntimeError("cryptography library not available")
@@ -112,33 +130,36 @@ def generate_mask_from_seed(seed: bytes, length: int) -> List[int]:
             masks.append(val)
     return masks
 
-def recover_dropped_client_masks(dropped_client_shared_secret: bytes, round_id: int, peer_ids: List[int], dropped_client_id: int, num_chunks: int) -> Dict[int, List[int]]:
+def derive_pairwise_mask_seed(shared_secret: bytes, client_a: int, client_b: int, round_id: int) -> bytes:
+    info = bytes([client_a, client_b]) + round_id.to_bytes(4, 'big')
+    prk = hkdf_extract(b"", shared_secret)
+    return hkdf_expand(prk, b"SwiftAgg-PairwiseMask-v1" + info, 32)
+
+def derive_stream_mask_seed(shared_secret: bytes, client_id: int, round_id: int, chunk_index: int) -> bytes:
+    info = bytes([client_id]) + round_id.to_bytes(4, 'big') + chunk_index.to_bytes(2, 'big')
+    prk = hkdf_extract(b"", shared_secret)
+    return hkdf_expand(prk, b"SwiftAgg-StreamMask-v1" + info, 32)
+
+def recover_dropped_client_pairwise_seeds(dropped_client_shared_secret: bytes, round_id: int, peer_ids: List[int], dropped_client_id: int) -> Dict[int, bytes]:
+    recovered_seeds = {}
+    for peer_id in peer_ids:
+        seed = derive_pairwise_mask_seed(dropped_client_shared_secret, min(dropped_client_id, peer_id), max(dropped_client_id, peer_id), round_id)
+        recovered_seeds[peer_id] = seed
+    return recovered_seeds
+
+def recover_dropped_client_masks(dropped_client_shared_secret: bytes, round_id: int, peer_ids: List[int], dropped_client_id: int, num_chunks: int, chunk_size: int) -> Dict[int, List[int]]:
     recovered_masks = {}
+    chunk_bytes = chunk_size * 2
+    pairwise_seeds = recover_dropped_client_pairwise_seeds(dropped_client_shared_secret, round_id, peer_ids, dropped_client_id)
+    
     for chunk_idx in range(num_chunks):
         combined_mask = [0] * CHUNK_ELEMENTS
         for peer_id in peer_ids:
-            seed_info = bytes([min(dropped_client_id, peer_id), max(dropped_client_id, peer_id)]) + round_id.to_bytes(4, 'big') + chunk_idx.to_bytes(2, 'big')
-            prk = hmac.new(b"", dropped_client_shared_secret, hashlib.sha256).digest()
-            stream_seed = hkdf_expand(prk, b"SwiftAgg-StreamMask-v1" + seed_info, 32)
-            peer_mask = generate_mask_from_seed(stream_seed, CHUNK_BYTES)
+            seed = pairwise_seeds[peer_id]
+            stream_seed = derive_stream_mask_seed(seed, dropped_client_id, round_id, chunk_idx)
+            peer_mask = generate_mask_from_seed(stream_seed, chunk_bytes)
             sign = 1 if dropped_client_id < peer_id else -1
-            for i in range(CHUNK_ELEMENTS):
+            for i in range(min(CHUNK_ELEMENTS, chunk_size)):
                 combined_mask[i] = (combined_mask[i] + sign * peer_mask[i]) % FIELD_MODULUS
         recovered_masks[chunk_idx] = combined_mask
     return recovered_masks
-
-def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
-    if not salt:
-        salt = bytes(32)
-    return hmac.new(salt, ikm, hashlib.sha256).digest()
-
-def hkdf_expand(prk: bytes, info: bytes, length: int) -> bytes:
-    okm = b""
-    t = b""
-    ctr = 1
-    while len(okm) < length:
-        h = hmac.new(prk, t + info + bytes([ctr]), hashlib.sha256)
-        t = h.digest()
-        okm += t
-        ctr += 1
-    return okm[:length]
