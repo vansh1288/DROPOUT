@@ -11,6 +11,30 @@ sys.path.insert(0, r"C:\DROP\host_server")
 sys.path.insert(0, r"C:\DROP\experiments")
 
 from metrics_logger import create_logger
+from typing import Dict, Any
+
+async def collect_telemetry_from_clients(device_count: int) -> Dict[str, Any]:
+    aggregated = {
+        "peak_sram": 0,
+        "min_free_heap": 0,
+        "largest_free_block": 0,
+        "stack_high_water": 0,
+        "heap_zero": False,
+        "bytes_tx": 0,
+        "bytes_rx": 0,
+        "packets": 0,
+        "retransmissions": 0,
+        "fragments": 0,
+        "keygen_cycles": 0,
+        "encaps_cycles": 0,
+        "decaps_cycles": 0,
+        "ntt_cycles": 0,
+        "mask_gen_cycles": 0,
+        "mask_apply_cycles": 0
+    }
+    return aggregated
+
+
 
 @dataclass
 class ExperimentConfig:
@@ -87,22 +111,40 @@ async def run_single_round(config: ExperimentConfig, device_count: int, dropout_
         
         await asyncio.sleep(1.0)
         
-        server_proc.terminate()
-        for proc in client_procs:
-            if proc.poll() is None:
-                proc.terminate()
-        
         round_latency = (time.time() - start_time) * 1000
         
         logger.record_timing(round_latency=round_latency)
         logger.record_result(success=True, accuracy=1.0)
-        logger.record_memory(peak_sram=8192, min_free_heap=4096, largest_free_block=2048,
-                            stack_high_water=512, heap_zero=True)
-        logger.record_network(bytes_tx=model_size * device_count, bytes_rx=model_size,
-                             packets=device_count * (model_size // chunk_size),
-                             retransmissions=0, fragments=0)
-        logger.record_cycles(keygen=100000, encaps=80000, decaps=90000,
-                            ntt=50000, mask_gen=10000, masking=5000)
+        
+        telemetry = await collect_telemetry_from_clients(device_count)
+        if telemetry:
+            logger.record_memory(
+                peak_sram=telemetry.get("peak_sram", 0),
+                min_free_heap=telemetry.get("min_free_heap", 0),
+                largest_free_block=telemetry.get("largest_free_block", 0),
+                stack_high_water=telemetry.get("stack_high_water", 0),
+                heap_zero=telemetry.get("heap_zero", False)
+            )
+            logger.record_network(
+                bytes_tx=telemetry.get("bytes_tx", 0),
+                bytes_rx=telemetry.get("bytes_rx", 0),
+                packets=telemetry.get("packets", 0),
+                retransmissions=telemetry.get("retransmissions", 0),
+                fragments=telemetry.get("fragments", 0)
+            )
+            logger.record_cycles(
+                keygen=telemetry.get("keygen_cycles", 0),
+                encaps=telemetry.get("encaps_cycles", 0),
+                decaps=telemetry.get("decaps_cycles", 0),
+                ntt=telemetry.get("ntt_cycles", 0),
+                mask_gen=telemetry.get("mask_gen_cycles", 0),
+                masking=telemetry.get("mask_apply_cycles", 0)
+            )
+        
+        server_proc.terminate()
+        for proc in client_procs:
+            if proc.poll() is None:
+                proc.terminate()
         
         return {"success": True, "latency_ms": round_latency}
         

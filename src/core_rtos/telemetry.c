@@ -155,3 +155,105 @@ void telemetry_dropout_detected(void) {
 void telemetry_recovery_started(void) {
     g_recovery_start_tick = xTaskGetTickCount();
 }
+
+void telemetry_start_cycle_measure(void) {
+    g_cycle_start = dwt_read_cycles();
+}
+
+uint32_t telemetry_end_cycle_measure(void) {
+    uint32_t end = dwt_read_cycles();
+    uint32_t elapsed = end - g_cycle_start;
+    g_cycle_start = 0;
+    return elapsed;
+}
+
+void telemetry_record_round_telemetry(void) {
+    if (g_telemetry_session.round_count > 0) {
+        telemetry_round_t* round = &g_telemetry_session.rounds[g_telemetry_session.round_count - 1];
+        round->memory.peak_sram_bytes = get_peak_sram();
+        round->memory.min_free_heap_bytes = xPortGetFreeHeapSize();
+        round->memory.largest_free_block_bytes = 0;
+        round->memory.heap_zero_confirmed = check_heap_zero();
+        
+        TaskStatus_t tasks[TELEMETRY_MAX_TASKS];
+        UBaseType_t count = uxTaskGetSystemState(tasks, TELEMETRY_MAX_TASKS, NULL);
+        if (count > TELEMETRY_MAX_TASKS) count = TELEMETRY_MAX_TASKS;
+        round->stacks.task_count = (uint8_t)count;
+        for (UBaseType_t i = 0; i < count; i++) {
+            task_stack_info_t* info = &round->stacks.tasks[i];
+            strncpy(info->task_name, tasks[i].pcTaskName, 15);
+            info->task_name[15] = 0;
+            info->stack_size_words = 1024;
+            info->high_water_mark_words = tasks[i].usStackHighWaterMark;
+            info->current_usage_words = 1024 - tasks[i].usStackHighWaterMark;
+        }
+    }
+}
+
+void telemetry_pack_round_complete(uint8_t* payload, size_t* payload_len) {
+    if (g_telemetry_session.round_count == 0) return;
+    telemetry_round_t* round = &g_telemetry_session.rounds[g_telemetry_session.round_count - 1];
+    
+    uint32_t offset = 0;
+    payload[offset++] = (round->round_id >> 24) & 0xFF;
+    payload[offset++] = (round->round_id >> 16) & 0xFF;
+    payload[offset++] = (round->round_id >> 8) & 0xFF;
+    payload[offset++] = round->round_id & 0xFF;
+    
+    payload[offset++] = (round->crypto.keygen_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.keygen_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.keygen_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.keygen_cycles & 0xFF;
+    
+    payload[offset++] = (round->crypto.encaps_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.encaps_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.encaps_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.encaps_cycles & 0xFF;
+    
+    payload[offset++] = (round->crypto.decaps_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.decaps_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.decaps_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.decaps_cycles & 0xFF;
+    
+    payload[offset++] = (round->crypto.hkdf_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.hkdf_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.hkdf_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.hkdf_cycles & 0xFF;
+    
+    payload[offset++] = (round->crypto.mask_gen_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.mask_gen_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.mask_gen_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.mask_gen_cycles & 0xFF;
+    
+    payload[offset++] = (round->crypto.mask_apply_cycles >> 24) & 0xFF;
+    payload[offset++] = (round->crypto.mask_apply_cycles >> 16) & 0xFF;
+    payload[offset++] = (round->crypto.mask_apply_cycles >> 8) & 0xFF;
+    payload[offset++] = round->crypto.mask_apply_cycles & 0xFF;
+    
+    payload[offset++] = (round->memory.peak_sram_bytes >> 24) & 0xFF;
+    payload[offset++] = (round->memory.peak_sram_bytes >> 16) & 0xFF;
+    payload[offset++] = (round->memory.peak_sram_bytes >> 8) & 0xFF;
+    payload[offset++] = round->memory.peak_sram_bytes & 0xFF;
+    
+    payload[offset++] = (round->memory.min_free_heap_bytes >> 24) & 0xFF;
+    payload[offset++] = (round->memory.min_free_heap_bytes >> 16) & 0xFF;
+    payload[offset++] = (round->memory.min_free_heap_bytes >> 8) & 0xFF;
+    payload[offset++] = round->memory.min_free_heap_bytes & 0xFF;
+    
+    payload[offset++] = (round->memory.largest_free_block_bytes >> 24) & 0xFF;
+    payload[offset++] = (round->memory.largest_free_block_bytes >> 16) & 0xFF;
+    payload[offset++] = (round->memory.largest_free_block_bytes >> 8) & 0xFF;
+    payload[offset++] = round->memory.largest_free_block_bytes & 0xFF;
+    
+    payload[offset++] = (round->stacks.tasks[0].high_water_mark_words >> 24) & 0xFF;
+    payload[offset++] = (round->stacks.tasks[0].high_water_mark_words >> 16) & 0xFF;
+    payload[offset++] = (round->stacks.tasks[0].high_water_mark_words >> 8) & 0xFF;
+    payload[offset++] = round->stacks.tasks[0].high_water_mark_words & 0xFF;
+    
+    payload[offset++] = round->memory.heap_zero_confirmed;
+    payload[offset++] = round->aggregation_success;
+    payload[offset++] = round->final_accuracy;
+    payload[offset++] = 0;
+    
+    *payload_len = offset;
+}

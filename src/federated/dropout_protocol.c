@@ -3,6 +3,7 @@
 #include "crypto_memory.h"
 #include <stdint.h>
 #include <string.h>
+#include <tinycrypt/hmac.h>
 
 #define FIELD_MODULUS 3329
 #define BARRETT_MULTIPLIER 20159
@@ -15,6 +16,52 @@ static inline uint16_t barrett_reduce(uint32_t a) {
     uint16_t r = (uint16_t)(a - t * FIELD_MODULUS);
     return r >= FIELD_MODULUS ? r - FIELD_MODULUS : r;
 }
+static inline uint16_t mod_q(int32_t val) {
+    int32_t r = val % 3329;
+    if (r < 0) r += 3329;
+    return (uint16_t)r;
+}
+
+static void hkdf_expand_shamir(const uint8_t* secret, uint16_t* coeffs, uint8_t threshold) {
+    uint8_t prk[32];
+    uint8_t okm[32 * 32];
+    uint8_t info[1] = {0};
+    uint8_t zero_salt[32] = {0};
+    struct tc_hmac_state_struct hmac;
+    tc_hmac_set_key(&hmac, zero_salt, 32);
+    tc_hmac_init(&hmac);
+    tc_hmac_update(&hmac, secret, 32);
+    tc_hmac_final(prk, 32, &hmac);
+    uint8_t t[32];
+    size_t t_len = 0;
+    uint8_t ctr = 1;
+    uint8_t* out = okm;
+    size_t remaining = 32 * 32;
+    tc_hmac_set_key(&hmac, prk, 32);
+    while (remaining > 0) {
+        tc_hmac_init(&hmac);
+        if (t_len) tc_hmac_update(&hmac, t, t_len);
+        tc_hmac_update(&hmac, info, 1);
+        tc_hmac_update(&hmac, &ctr, 1);
+        tc_hmac_final(t, 32, &hmac);
+        t_len = 32;
+        size_t chunk = remaining < 32 ? remaining : 32;
+        for (size_t i = 0; i < chunk; i++) out[i] = t[i];
+        out += chunk;
+        remaining -= chunk;
+        ctr++;
+    }
+    for (uint8_t i = 0; i < threshold; i++) {
+        for (int j = 0; j < 32; j++) {
+            uint16_t val = (uint16_t)(okm[i * 32 + j] | (okm[i * 32 + j + 1] << 8));
+            coeffs[i * 32 + j] = mod_q(val);
+        }
+    }
+    crypto_zeroize(prk, 32);
+    crypto_zeroize(okm, 32 * 32);
+    crypto_zeroize(t, 32);
+}
+
 
 static inline uint16_t gf3329_add(uint16_t a, uint16_t b) {
     uint16_t r = a + b;
@@ -55,18 +102,8 @@ static void poly_eval(const uint16_t* coeffs, uint8_t threshold, uint16_t x, uin
 
 pqc_status_t shamir_gen_polynomial(const uint8_t* secret, uint8_t threshold, uint16_t* coeffs) {
     if (!secret || !coeffs || threshold == 0 || threshold > 32) return ERR_INVALID_ARGUMENT;
-    for (int i = 0; i < 32; i++) {
-        coeffs[i] = secret[i];
-    }
     crypto_workspace_t* ws = scratch_get_crypto_ws();
-    mask_prg_init((uint8_t*)ws);
-    uint8_t rnd[32 * 32];
-    mask_prg_expand(rnd, sizeof(rnd));
-    for (uint8_t i = 1; i < threshold; i++) {
-        for (int j = 0; j < 32; j++) {
-            coeffs[i * 32 + j] = barrett_reduce(rnd[(i - 1) * 32 + j]);
-        }
-    }
+    hkdf_expand_shamir(secret, coeffs, threshold);
     crypto_zeroize(ws, sizeof(crypto_workspace_t));
     return PQC_SUCCESS;
 }
@@ -109,26 +146,26 @@ pqc_status_t shamir_reconstruct_secret(const shamir_share_t* shares, uint8_t num
     if (!shares || !secret || num_shares < threshold || threshold == 0) return ERR_INSUFFICIENT_SHARES;
     if (threshold > 32) return ERR_INVALID_THRESHOLD;
 
-    for (uint8_t i = 0; i < num_shares; i++) {
-        for (uint8_t j = i + 1; j < num_shares; j++) {
+    for (uint8_t i = 0; i < threshold; i++) {
+        for (uint8_t j = i + 1; j < threshold; j++) {
             if (shares[i].share_id == shares[j].share_id) return ERR_DUPLICATE_SHARE_ID;
         }
     }
 
     for (int j = 0; j < 32; j++) {
         uint16_t result = 0;
-        for (uint8_t i = 0; i < num_shares; i++) {
+        for (uint8_t i = 0; i < threshold; i++) {
             if (shares[i].share_id == 0) continue;
             uint16_t xi = shares[i].share_id;
             uint16_t yi = shares[i].value[j];
             uint16_t li = 1;
-            for (uint8_t k = 0; k < num_shares; k++) {
+            for (uint8_t k = 0; k < threshold; k++) {
                 if (i == k) continue;
                 if (shares[k].share_id == 0) continue;
                 uint16_t xk = shares[k].share_id;
-                uint16_t num = gf3329_mul(xk, li);
+                uint16_t num = xk;
                 uint16_t den = gf3329_sub(xk, xi);
-                li = gf3329_mul(num, gf3329_inv(den));
+                li = gf3329_mul(li, gf3329_mul(num, gf3329_inv(den)));
             }
             result = gf3329_add(result, gf3329_mul(yi, li));
         }

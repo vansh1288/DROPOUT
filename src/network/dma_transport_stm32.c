@@ -1,17 +1,14 @@
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
-#include "dma_isr_handler.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "stm32h7xx_hal.h"
 #include <stdint.h>
-#include <string.h>
 
 #define DMA_RX_STREAM DMA1_Stream0
 #define DMA_TX_STREAM DMA1_Stream1
 #define DMA_RX_CHANNEL DMA_CHANNEL_0
 #define DMA_TX_CHANNEL DMA_CHANNEL_1
-#define DMA_BUFFER_SIZE DMA_BUFFER_BYTES
 
 static DMA_HandleTypeDef hdma_rx;
 static DMA_HandleTypeDef hdma_tx;
@@ -64,7 +61,7 @@ static void dma_rx_config(uint8_t *buffer) {
     __HAL_LINKDMA(&hdma_rx, Parent, hdma_rx);
     HAL_DMA_RegisterCallback(&hdma_rx, HAL_DMA_XFER_CPLT_CB_ID, dma_rx_complete_callback);
     HAL_DMA_RegisterCallback(&hdma_rx, HAL_DMA_XFER_ERROR_CB_ID, dma_error_callback);
-    HAL_DMA_Start_IT(&hdma_rx, (uint32_t)&ETH->DMACurrentRxDesc->Buffer1Addr, (uint32_t)buffer, DMA_BUFFER_SIZE);
+    HAL_DMA_Start_IT(&hdma_rx, (uint32_t)&ETH->DMACurrentRxDesc->Buffer1Addr, (uint32_t)buffer, DMA_BUFFER_BYTES);
 }
 
 static void dma_tx_config(uint8_t *buffer, uint16_t len) {
@@ -102,24 +99,27 @@ pqc_status_t dma_transport_stm32_init(void) {
     crypto_zeroize(dma_tx->ping, DMA_BUFFER_BYTES);
     crypto_zeroize(dma_tx->pong, DMA_BUFFER_BYTES);
     dma_rx_config(dma_rx->ping);
-    dma_isr_set_stream_task(stream_task_handle);
     return PQC_SUCCESS;
 }
 
 void dma_transport_stm32_set_stream_task(TaskHandle_t handle) {
     stream_task_handle = handle;
-    dma_isr_set_stream_task(handle);
 }
 
 pqc_status_t dma_transport_stm32_start_rx(void) {
+    dma_double_buffer_t *dma_rx = scratch_get_dma_rx();
+    uint8_t *active_buf = dma_rx_active ? dma_rx->pong : dma_rx->ping;
+    dma_rx_config(active_buf);
     return PQC_SUCCESS;
 }
 
 pqc_status_t dma_transport_stm32_start_tx(const uint8_t *data, uint16_t len) {
-    if (len > DMA_BUFFER_SIZE) return ERR_CHUNK_TOO_LARGE;
+    if (len > DMA_BUFFER_BYTES) return ERR_CHUNK_TOO_LARGE;
     dma_double_buffer_t *dma_tx = scratch_get_dma_tx();
     uint8_t *active_buf = dma_tx_active ? dma_tx->pong : dma_tx->ping;
-    memcpy(active_buf, data, len);
+    for (uint16_t i = 0; i < len; i++) {
+        active_buf[i] = data[i];
+    }
     dma_tx_config(active_buf, len);
     return PQC_SUCCESS;
 }

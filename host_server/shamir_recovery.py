@@ -44,23 +44,33 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
         for j, (xj, _) in enumerate(shares):
             if i == j:
                 continue
-            numerator = barrett_reduce(numerator * (-xj % p))
-            denominator = barrett_reduce(denominator * ((xi - xj) % p))
+            numerator = (numerator * xj) % p
+            denominator = (denominator * ((xi - xj) % p)) % p
         
-        lagrange_coeff = barrett_reduce(numerator * mod_inv(denominator, p))
-        secret = barrett_reduce(secret + yi * lagrange_coeff)
+        lagrange_coeff = (numerator * mod_inv(denominator, p)) % p
+        secret = (secret + yi * lagrange_coeff) % p
     
     return secret
 
 def reconstruct_secret_bytes(shares: List[Tuple[int, bytes]]) -> bytes:
     if not shares:
         raise ValueError("No shares provided")
-    num_bytes = len(shares[0][1])
-    secret_bytes = bytearray(num_bytes)
+    share_value_len = len(shares[0][1])
+    if share_value_len != 64:
+        raise ValueError("Share value must be 64 bytes (32 GF(3329) elements)")
+    secret_elements = [0] * 32
     
-    for byte_idx in range(num_bytes):
-        byte_shares = [(x, y[byte_idx]) for x, y in shares]
-        secret_bytes[byte_idx] = reconstruct_secret(byte_shares)
+    for elem_idx in range(32):
+        elem_shares = []
+        for x, y in shares:
+            val = y[elem_idx * 2] | (y[elem_idx * 2 + 1] << 8)
+            elem_shares.append((x, val % FIELD_MODULUS))
+        secret_elements[elem_idx] = reconstruct_secret(elem_shares)
+    
+    secret_bytes = bytearray(64)
+    for i, val in enumerate(secret_elements):
+        secret_bytes[i * 2] = val & 0xFF
+        secret_bytes[i * 2 + 1] = (val >> 8) & 0xFF
     
     return bytes(secret_bytes)
 
@@ -122,13 +132,13 @@ def recover_dropped_client_masks(dropped_client_shared_secret: bytes, round_id: 
     pairwise_seeds = recover_dropped_client_pairwise_seeds(dropped_client_shared_secret, round_id, peer_ids, dropped_client_id)
     
     for chunk_idx in range(num_chunks):
-        combined_mask = [0] * CHUNK_ELEMENTS
+        combined_mask = [0] * chunk_size
         for peer_id in peer_ids:
             seed = pairwise_seeds[peer_id]
             stream_seed = derive_stream_mask_seed(seed, dropped_client_id, round_id, chunk_idx)
             peer_mask = generate_mask_from_seed(stream_seed, chunk_bytes)
             sign = 1 if dropped_client_id < peer_id else -1
-            for i in range(min(CHUNK_ELEMENTS, chunk_size)):
+            for i in range(chunk_size):
                 combined_mask[i] = (combined_mask[i] + sign * peer_mask[i]) % FIELD_MODULUS
         recovered_masks[chunk_idx] = combined_mask
     return recovered_masks

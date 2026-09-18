@@ -23,6 +23,12 @@ static inline uint16_t barrett_reduce_q(uint32_t a) {
     uint16_t r = (uint16_t)(a - t * 3329);
     return r >= 3329 ? r - 3329 : r;
 }
+static inline uint16_t mod_q(int32_t val) {
+    int32_t r = val % 3329;
+    if (r < 0) r += 3329;
+    return (uint16_t)r;
+}
+
 
 void stream_aggregator_init(void) {
     g_stream_queue = xQueueCreateStatic(STREAM_QUEUE_LENGTH, STREAM_QUEUE_ITEM_SIZE, stream_queue_storage, &stream_queue_struct);
@@ -62,7 +68,7 @@ static void stream_aggregator_task(void* pvParameters) {
 }
 
 pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
-    if (chunk_size > 256) return ERR_CHUNK_TOO_LARGE;
+    if (chunk_size > CHUNK_BUFFER_BYTES) return ERR_CHUNK_TOO_LARGE;
     if (chunk_size % 2 != 0) return ERR_CHUNK_TOO_SMALL;
 
     chunk_buffer_t* chunk_buf = scratch_get_chunk_buf();
@@ -75,7 +81,7 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
     if (ret != PQC_SUCCESS) return ret;
 
     mask_prg_init(stream_seed);
-    int16_t mask[128];
+    int16_t mask[CHUNK_BUFFER_BYTES / 2];
     mask_prg_expand((uint8_t*)mask, chunk_size);
 
     int16_t* input = (int16_t*)chunk_buf->data;
@@ -84,7 +90,7 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
 
     for (size_t i = 0; i < num_elements; i++) {
         int32_t sum = (int32_t)input[i] + (int32_t)mask[i];
-        output[i] = (int16_t)barrett_reduce_q((uint32_t)sum);
+        output[i] = (int16_t)mod_q(sum);
     }
 
     crypto_zeroize(mask, sizeof(mask));
@@ -93,7 +99,7 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
 }
 
 pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
-    if (chunk_size > 256) return ERR_CHUNK_TOO_LARGE;
+    if (chunk_size > CHUNK_BUFFER_BYTES) return ERR_CHUNK_TOO_LARGE;
     if (chunk_size % 2 != 0) return ERR_CHUNK_TOO_SMALL;
 
     chunk_buffer_t* chunk_buf = scratch_get_chunk_buf();
@@ -106,7 +112,7 @@ pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id
     if (ret != PQC_SUCCESS) return ret;
 
     mask_prg_init(stream_seed);
-    int16_t mask[128];
+    int16_t mask[CHUNK_BUFFER_BYTES / 2];
     mask_prg_expand((uint8_t*)mask, chunk_size);
 
     int16_t* input = (int16_t*)chunk_buf->data;
@@ -115,7 +121,7 @@ pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id
 
     for (size_t i = 0; i < num_elements; i++) {
         int32_t diff = (int32_t)input[i] - (int32_t)mask[i];
-        output[i] = (int16_t)barrett_reduce_q((uint32_t)(diff + 3329));
+        output[i] = (int16_t)mod_q(diff);
     }
 
     crypto_zeroize(mask, sizeof(mask));

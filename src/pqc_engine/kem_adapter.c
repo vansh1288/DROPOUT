@@ -9,6 +9,17 @@
 #include <tinycrypt/aes.h>
 #include <tinycrypt/ccm_mode.h>
 #include <tinycrypt/constants.h>
+extern int pqcrystals_kyber512_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber512_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber512_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+extern int pqcrystals_kyber768_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber768_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber768_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+extern int pqcrystals_kyber1024_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber1024_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber1024_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+
+
 
 static kem_variant_t g_active_variant = KEMLIB_ML_KEM_768;
 static size_t g_pk_bytes = ML_KEM_768_PUBLIC_KEY_BYTES;
@@ -109,11 +120,18 @@ pqc_status_t kem_adapter_get_sizes(size_t* pk_bytes, size_t* sk_bytes, size_t* c
 pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
     if (!keypair) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
+    int ret;
     if (g_active_variant == KEMLIB_ML_KEM_X25519) {
-        int ret = uECC_make_key(keypair->public_key, keypair->secret_key, uECC_curve25519());
+        ret = uECC_make_key(keypair->public_key, keypair->secret_key, uECC_curve25519());
         if (ret != TC_CRYPTO_SUCCESS) return ERR_KEM_KEYGEN_FAILED;
-    } else {
-        int ret = KEM_KEYPAIR_FN(keypair->public_key, keypair->secret_key, ws->data);
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        ret = pqcrystals_kyber512_ref_keypair(keypair->public_key, keypair->secret_key);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+        ret = pqcrystals_kyber768_ref_keypair(keypair->public_key, keypair->secret_key);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+        ret = pqcrystals_kyber1024_ref_keypair(keypair->public_key, keypair->secret_key);
         if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
     }
     keypair->variant = g_active_variant;
@@ -152,8 +170,22 @@ pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, k
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         crypto_zeroize(ephemeral_sk, 32);
         return PQC_SUCCESS;
-    } else {
-        int ret = KEM_ENCAP_FN(encap->ciphertext, encap->shared_secret, public_key, ws->data);
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        int ret = pqcrystals_kyber512_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
+        if (ret != 0) return ERR_KEM_ENCAP_FAILED;
+        encap->ciphertext_len = g_ct_bytes;
+        encap->shared_secret_len = g_ss_bytes;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+        int ret = pqcrystals_kyber768_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
+        if (ret != 0) return ERR_KEM_ENCAP_FAILED;
+        encap->ciphertext_len = g_ct_bytes;
+        encap->shared_secret_len = g_ss_bytes;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+        int ret = pqcrystals_kyber1024_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
         if (ret != 0) return ERR_KEM_ENCAP_FAILED;
         encap->ciphertext_len = g_ct_bytes;
         encap->shared_secret_len = g_ss_bytes;
@@ -183,8 +215,18 @@ pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, c
         }
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         return PQC_SUCCESS;
-    } else {
-        int ret = KEM_DECAP_FN(shared_secret, ciphertext, secret_key, ws->data);
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        int ret = pqcrystals_kyber512_ref_dec(shared_secret, ciphertext, secret_key);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+        int ret = pqcrystals_kyber768_ref_dec(shared_secret, ciphertext, secret_key);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+        int ret = pqcrystals_kyber1024_ref_dec(shared_secret, ciphertext, secret_key);
         if (ret != 0) return ERR_KEM_DECAP_FAILED;
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         return PQC_SUCCESS;

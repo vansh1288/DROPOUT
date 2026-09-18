@@ -21,11 +21,21 @@ void mask_prg_init(const uint8_t seed[32]) {
         memset(g_nonce, 0, 16);
         memset(g_ctr, 0, 16);
         g_initialized = 1;
+    } else {
+        for (int i = 15; i >= 0; i--) {
+            g_nonce[i]++;
+            if (g_nonce[i] != 0) break;
+        }
+        memset(g_ctr, 0, 16);
     }
 }
 
 void mask_prg_reseed(const uint8_t seed[32]) {
     tc_aes256_set_encrypt_key(&g_aes_sched, seed);
+    for (int i = 15; i >= 0; i--) {
+        g_nonce[i]++;
+        if (g_nonce[i] != 0) break;
+    }
     memset(g_ctr, 0, 16);
 }
 

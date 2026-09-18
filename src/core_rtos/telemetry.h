@@ -69,5 +69,8 @@ void telemetry_round_start(uint32_t round_id);
 void telemetry_round_end(uint8_t success, uint8_t accuracy);
 void telemetry_record_network(uint32_t tx, uint32_t rx, uint32_t packets, uint32_t retrans, uint32_t fragments);
 void telemetry_record_timing(uint32_t round_latency, uint32_t dropout_detect, uint32_t recovery);
+void telemetry_start_cycle_measure(void);
+uint32_t telemetry_end_cycle_measure(void);
+void telemetry_record_round_telemetry(void);
 
 #endif

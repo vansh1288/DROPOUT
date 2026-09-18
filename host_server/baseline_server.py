@@ -3,6 +3,11 @@ from flwr.server.strategy import FedAvg
 from flwr.common import Parameters, Scalar, ndarrays_to_parameters, parameters_to_ndarrays
 from typing import List, Tuple, Dict, Optional, Union
 import numpy as np
+
+FIELD_MODULUS = 3329
+
+def mod_inv(a: int, p: int = FIELD_MODULUS) -> int:
+    return pow(a, p - 2, p)
 import csv
 import time
 import os
@@ -68,18 +73,19 @@ class ClassicalFedAvg(FedAvg):
         reference_ndarrays = parameters_to_ndarrays(first_result.parameters)
         
         for i, ref_array in enumerate(reference_ndarrays):
-            aggregated = np.zeros_like(ref_array, dtype=np.float64)
+            aggregated = np.zeros_like(ref_array, dtype=np.int64)
             total_weight = 0
             
             for client_proxy, fit_res in results:
                 ndarrays = parameters_to_ndarrays(fit_res.parameters)
                 if i < len(ndarrays):
                     weight = fit_res.num_examples
-                    aggregated += ndarrays[i].astype(np.float64) * weight
+                    aggregated += ndarrays[i].astype(np.int64) * weight
                     total_weight += weight
             
             if total_weight > 0:
-                aggregated = aggregated / total_weight
+                inv_weight = mod_inv(total_weight % FIELD_MODULUS)
+                aggregated = (aggregated * inv_weight) % FIELD_MODULUS
             aggregated_ndarrays.append(aggregated.astype(ref_array.dtype))
         
         latency_ms = (time.perf_counter() - start) * 1000
