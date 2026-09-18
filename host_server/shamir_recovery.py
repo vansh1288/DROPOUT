@@ -2,6 +2,15 @@ import secrets
 from typing import List, Tuple, Dict
 
 FIELD_MODULUS = 3329
+BARRETT_MULTIPLIER = 20159
+BARRETT_SHIFT = 26
+
+def barrett_reduce(a: int) -> int:
+    t = (a * BARRETT_MULTIPLIER) >> BARRETT_SHIFT
+    r = a - t * FIELD_MODULUS
+    if r >= FIELD_MODULUS:
+        r -= FIELD_MODULUS
+    return r
 
 def mod_inv(a: int, p: int = FIELD_MODULUS) -> int:
     return pow(a, p - 2, p)
@@ -9,7 +18,7 @@ def mod_inv(a: int, p: int = FIELD_MODULUS) -> int:
 def evaluate_polynomial(coeffs: List[int], x: int, p: int = FIELD_MODULUS) -> int:
     result = 0
     for coeff in reversed(coeffs):
-        result = (result * x + coeff) % p
+        result = barrett_reduce(result * x + coeff)
     return result
 
 def generate_shares(secret: int, n: int, t: int) -> List[Tuple[int, int]]:
@@ -42,11 +51,11 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
         for j, (xj, _) in enumerate(shares):
             if i == j:
                 continue
-            numerator = (numerator * (-xj)) % p
-            denominator = (denominator * (xi - xj)) % p
+            numerator = barrett_reduce(numerator * (-xj % p))
+            denominator = barrett_reduce(denominator * ((xi - xj) % p))
         
-        lagrange_coeff = (numerator * mod_inv(denominator, p)) % p
-        secret = (secret + yi * lagrange_coeff) % p
+        lagrange_coeff = barrett_reduce(numerator * mod_inv(denominator, p))
+        secret = barrett_reduce(secret + yi * lagrange_coeff)
     
     return secret
 

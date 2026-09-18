@@ -1,4 +1,30 @@
-#include "kem_adapter.h"
+import os
+
+def modify_platformio_ini():
+    path = r"C:\DROP\platformio.ini"
+    with open(path, "r") as f:
+        content = f.read()
+    
+    lib_deps_block = """lib_deps = 
+    https://github.com/mupq/pqm4#main
+    https://github.com/intel/tinycrypt#main"""
+    
+    content = content.replace(
+        "[env:cortex_m4]\nplatform = ststm32",
+        "[env:cortex_m4]\nplatform = ststm32\n" + lib_deps_block
+    )
+    content = content.replace(
+        "[env:esp32c3]\nplatform = espressif32",
+        "[env:esp32c3]\nplatform = espressif32\n" + lib_deps_block
+    )
+    
+    with open(path, "w") as f:
+        f.write(content)
+    print("Modified platformio.ini")
+
+def modify_kem_adapter_c():
+    path = r"C:\DROP\src\pqc_engine\kem_adapter.c"
+    new_content = '''#include "kem_adapter.h"
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "crypto_memory.h"
@@ -204,67 +230,18 @@ pqc_status_t kem_adapter_zeroize_scratchpad(void) {
     return PQC_SUCCESS;
 }
 
-static const uint8_t kat_seed[48] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
-    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
-    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
-    0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f
-};
-
-static const uint8_t kat_pk[1184] = {
-    0x9f, 0x7a, 0x5d, 0x3c, 0x8e, 0x2b, 0x1f, 0x4a,
-    0x6c, 0x9d, 0x3e, 0x7f, 0x2a, 0x5b, 0x8c, 0x1d,
-    0x4e, 0x7f, 0x3a, 0x9c, 0x2d, 0x5e, 0x8f, 0x1a,
-    0x4b, 0x7c, 0x3d, 0x9e, 0x2f, 0x5a, 0x8b, 0x1c,
-    0x4d, 0x7e, 0x3f, 0x9a, 0x2b, 0x5c, 0x8d, 0x1e,
-    0x4f, 0x7a, 0x3b, 0x9c, 0x2d, 0x5e, 0x8f, 0x1a,
-    0x4b, 0x7c, 0x3d, 0x9e, 0x2f, 0x5a, 0x8b, 0x1c,
-    0x4d, 0x7e, 0x3f, 0x9a, 0x2b, 0x5c, 0x8d, 0x1e
-};
-
-static const uint8_t kat_sk[2400] = {
-    0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x7a, 0x8b,
-    0x9c, 0xad, 0xbe, 0xcf, 0xd0, 0xe1, 0xf2, 0x03,
-    0x14, 0x25, 0x36, 0x47, 0x58, 0x69, 0x7a, 0x8b,
-    0x9c, 0xad, 0xbe, 0xcf, 0xd0, 0xe1, 0xf2, 0x03
-};
-
-static const uint8_t kat_ct[1088] = {
-    0x5e, 0x6f, 0x7a, 0x8b, 0x9c, 0xad, 0xbe, 0xcf,
-    0xd0, 0xe1, 0xf2, 0x03, 0x14, 0x25, 0x36, 0x47,
-    0x58, 0x69, 0x7a, 0x8b, 0x9c, 0xad, 0xbe, 0xcf,
-    0xd0, 0xe1, 0xf2, 0x03, 0x14, 0x25, 0x36, 0x47
-};
-
-static const uint8_t kat_ss[32] = {
-    0x8e, 0x2b, 0x1f, 0x4a, 0x6c, 0x9d, 0x3e, 0x7f,
-    0x2a, 0x5b, 0x8c, 0x1d, 0x4e, 0x7f, 0x3a, 0x9c,
-    0x2d, 0x5e, 0x8f, 0x1a, 0x4b, 0x7c, 0x3d, 0x9e,
-    0x2f, 0x5a, 0x8b, 0x1c, 0x4d, 0x7e, 0x3f, 0x9a
-};
-
 pqc_status_t kem_adapter_self_test(void) {
     kem_keypair_t kp;
     kem_encapsulation_t enc;
     uint8_t ss[32];
-    uint8_t pk[1184];
-    uint8_t sk[2400];
-    uint8_t ct[1088];
     pqc_status_t ret;
-
     ret = kem_adapter_keypair(&kp);
     if (ret != PQC_SUCCESS) return ERR_CRYPTO_FAILURE;
-
     ret = kem_adapter_encapsulate(kp.public_key, kp.public_key_len, &enc);
     if (ret != PQC_SUCCESS) return ERR_CRYPTO_FAILURE;
-
     ret = kem_adapter_decapsulate(enc.ciphertext, enc.ciphertext_len, kp.secret_key, kp.secret_key_len, ss);
     if (ret != PQC_SUCCESS) return ERR_CRYPTO_FAILURE;
-
     if (crypto_ct_compare(ss, enc.shared_secret, 32) != 0) return ERR_CRYPTO_FAILURE;
-
     crypto_zeroize(&kp, sizeof(kp));
     crypto_zeroize(&enc, sizeof(enc));
     crypto_zeroize(ss, 32);
@@ -274,3 +251,119 @@ pqc_status_t kem_adapter_self_test(void) {
 uint32_t kem_adapter_get_last_cycles(void) {
     return g_last_cycles;
 }
+'''
+    with open(path, "w") as f:
+        f.write(new_content)
+    print("Modified kem_adapter.c")
+
+def modify_mask_prg_c():
+    path = r"C:\DROP\src\pqc_engine\mask_prg.c"
+    new_content = '''#include "mask_prg.h"
+#include <tinycrypt/aes.h>
+#include <tinycrypt/ctr_mode.h>
+#include <string.h>
+
+static struct tc_aes_key_sched_struct g_aes_sched;
+static uint8_t g_nonce[16] = {0};
+static uint8_t g_ctr[16] = {0};
+
+void mask_prg_init(const uint8_t seed[32]) {
+    tc_aes256_set_encrypt_key(&g_aes_sched, seed);
+    memset(g_nonce, 0, 16);
+    memset(g_ctr, 0, 16);
+}
+
+void mask_prg_reseed(const uint8_t seed[32]) {
+    mask_prg_init(seed);
+}
+
+void mask_prg_expand(uint8_t* out, size_t len) {
+    size_t generated = 0;
+    while (generated < len) {
+        size_t chunk = len - generated;
+        if (chunk > 16) chunk = 16;
+        tc_ctr_mode(out + generated, chunk, g_nonce, g_ctr, &g_aes_sched);
+        generated += chunk;
+    }
+}
+
+void mask_prg_get_bytes(uint8_t* out, size_t len) {
+    mask_prg_expand(out, len);
+}
+'''
+    with open(path, "w") as f:
+        f.write(new_content)
+    print("Modified mask_prg.c")
+
+def modify_crypto_memory_c():
+    path = r"C:\DROP\src\pqc_engine\crypto_memory.c"
+    new_content = '''#include "memory_scratchpad.h"
+#include "protocol_types.h"
+#include <string.h>
+
+void crypto_zeroize(volatile void* ptr, size_t len) {
+    volatile uint8_t* p = (volatile uint8_t*)ptr;
+    while (len--) {
+        *p++ = 0;
+    }
+}
+
+int crypto_ct_compare(const void* a, const void* b, size_t len) {
+    const volatile uint8_t* pa = (const volatile uint8_t*)a;
+    const volatile uint8_t* pb = (const volatile uint8_t*)b;
+    uint8_t diff = 0;
+    while (len--) {
+        diff |= *pa++ ^ *pb++;
+    }
+    return (int)diff;
+}
+
+void crypto_ct_copy(void* dst, const void* src, size_t len, int condition) {
+    uint8_t* d = (uint8_t*)dst;
+    const uint8_t* s = (const uint8_t*)src;
+    uint8_t mask = (uint8_t)(-condition);
+    while (len--) {
+        *d = (*d & ~mask) | (*s & mask);
+        d++;
+        s++;
+    }
+}
+
+void crypto_zeroize_scratchpad_region(scratch_region_t region) {
+    scratch_zeroize_region(region);
+}
+
+void crypto_zeroize_all_scratchpad(void) {
+    scratch_zeroize_all();
+}
+'''
+    with open(path, "w") as f:
+        f.write(new_content)
+    print("Modified crypto_memory.c")
+
+def create_tinycrypt_config():
+    path = r"C:\DROP\src\pqc_engine\tinycrypt_config.h"
+    content = '''#ifndef TINYCRYPT_CONFIG_H
+#define TINYCRYPT_CONFIG_H
+
+#define TC_AES_256 1
+#define TC_HMAC 1
+#define TC_SHA256 1
+#define TC_CTR_MODE 1
+
+#define TC_NO_OPTIMIZATION 1
+#define TC_NO_INLINE 1
+
+#endif
+'''
+    with open(path, "w") as f:
+        f.write(content)
+    print("Created tinycrypt_config.h")
+
+if __name__ == "__main__":
+    modify_platformio_ini()
+    modify_kem_adapter_c()
+    modify_mask_prg_c()
+    modify_crypto_memory_c()
+    create_tinycrypt_config()
+    print("All modifications applied successfully.")

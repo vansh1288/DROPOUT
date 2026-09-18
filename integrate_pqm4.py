@@ -1,4 +1,145 @@
-#include "kem_adapter.h"
+import os
+
+def modify_platformio_ini():
+    path = r"C:\DROP\platformio.ini"
+    with open(path, "r") as f:
+        content = f.read()
+    
+    # Add pqm4 include path and source files to cortex_m4 build_flags
+    cortex_m4_section = """    -Isrc/network
+linker_script = ${platformio.build_dir}/ldscript.ld
+
+[env:esp32c3]"""
+    
+    new_cortex_m4 = """    -Isrc/network
+    -Ideps/pqm4/pqcrystals/kyber/ref
+    -Ideps/pqm4/common
+    -Ideps/pqm4/pqcrystals/kyber
+    -DUSE_PQM4_KEM768
+linker_script = ${platformio.build_dir}/ldscript.ld
+
+[env:esp32c3]"""
+    
+    content = content.replace(cortex_m4_section, new_cortex_m4)
+    
+    # Add pqm4 include path to esp32c3 build_flags
+    esp32c3_section = """    -Isrc/network
+
+[env:native]"""
+    
+    new_esp32c3 = """    -Isrc/network
+    -Ideps/pqm4/pqcrystals/kyber/ref
+    -Ideps/pqm4/common
+    -Ideps/pqm4/pqcrystals/kyber
+    -DUSE_PQM4_KEM768
+
+[env:native]"""
+    
+    content = content.replace(esp32c3_section, new_esp32c3)
+    
+    # Add pqm4 source files to native build as well
+    native_section = """    -Isrc/network
+
+build_unflags ="""
+    
+    new_native = """    -Isrc/network
+    -Ideps/pqm4/pqcrystals/kyber/ref
+    -Ideps/pqm4/common
+    -Ideps/pqm4/pqcrystals/kyber
+    -DUSE_PQM4_KEM768
+
+build_unflags ="""
+    
+    content = content.replace(native_section, new_native)
+    
+    # Add src_build to compile pqm4 sources
+    # PlatformIO will automatically compile .c files in src/ but we need to also compile pqm4 sources
+    # We'll add extra_scripts or use build_src_filter
+    build_filter = """    -Isrc/network
+    -Ideps/pqm4/pqcrystals/kyber/ref
+    -Ideps/pqm4/common
+    -Ideps/pqm4/pqcrystals/kyber
+    -DUSE_PQM4_KEM768
+
+build_unflags ="""
+    
+    content = content.replace(build_filter, build_filter)
+    
+    # Add build_src_filter to include pqm4 sources
+    if "build_src_filter" not in content:
+        content = content.replace(
+            "[env:cortex_m4]",
+            "[env:cortex_m4]\nbuild_src_filter = +<*> +<deps/pqm4/pqcrystals/kyber/ref/*.c> +<deps/pqm4/common/*.c>"
+        )
+        content = content.replace(
+            "[env:esp32c3]",
+            "[env:esp32c3]\nbuild_src_filter = +<*> +<deps/pqm4/pqcrystals/kyber/ref/*.c> +<deps/pqm4/common/*.c>"
+        )
+        content = content.replace(
+            "[env:native]",
+            "[env:native]\nbuild_src_filter = +<*> +<deps/pqm4/pqcrystals/kyber/ref/*.c> +<deps/pqm4/common/*.c>"
+        )
+    
+    with open(path, "w") as f:
+        f.write(content)
+    print("Modified platformio.ini")
+
+def modify_kem_adapter_h():
+    path = r"C:\DROP\src\pqc_engine\kem_adapter.h"
+    new_content = """#ifndef KEM_ADAPTER_H
+#define KEM_ADAPTER_H
+
+#include "protocol_types.h"
+#include "memory_scratchpad.h"
+#include <stdint.h>
+#include <stddef.h>
+
+#define KEM_KEYPAIR_FN   pqcrystals_kyber768_ref_keypair
+#define KEM_ENCAP_FN     pqcrystals_kyber768_ref_enc
+#define KEM_DECAP_FN     pqcrystals_kyber768_ref_dec
+
+#define KEM_ADAPTER_MAX_PK_BYTES   ML_KEM_1024_PUBLIC_KEY_BYTES
+#define KEM_ADAPTER_MAX_SK_BYTES   ML_KEM_1024_SECRET_KEY_BYTES
+#define KEM_ADAPTER_MAX_CT_BYTES   ML_KEM_1024_CIPHERTEXT_BYTES
+#define KEM_ADAPTER_SS_BYTES       ML_KEM_1024_SHARED_SECRET_BYTES
+
+#define KDF_LABEL_KEM_SHARED      "MLKEM-SharedSecret-v1"
+#define KDF_LABEL_PAIRWISE_MASK   "SwiftAgg-PairwiseMask-v1"
+#define KDF_LABEL_STREAM_MASK     "SwiftAgg-StreamMask-v1"
+#define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
+#define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+pqc_status_t kem_adapter_init(kem_variant_t variant);
+kem_variant_t kem_adapter_get_variant(void);
+pqc_status_t kem_adapter_get_sizes(size_t* pk_bytes, size_t* sk_bytes, size_t* ct_bytes, size_t* ss_bytes);
+pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair);
+pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap);
+pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret);
+pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key);
+pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret, uint8_t client_id_a, uint8_t client_id_b, uint32_t round_id, uint8_t* mask_seed);
+pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint8_t* stream_seed);
+pqc_status_t kem_adapter_derive_shamir_secret(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint8_t* shamir_secret);
+pqc_status_t kem_adapter_zeroize_scratchpad(void);
+pqc_status_t kem_adapter_self_test(void);
+uint32_t kem_adapter_get_last_cycles(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif
+"""
+    with open(path, "w") as f:
+        f.write(new_content)
+    print("Modified kem_adapter.h")
+
+def modify_kem_adapter_c():
+    path = r"C:\DROP\src\pqc_engine\kem_adapter.c"
+    new_content = '''#include "kem_adapter.h"
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "crypto_memory.h"
@@ -274,3 +415,13 @@ pqc_status_t kem_adapter_self_test(void) {
 uint32_t kem_adapter_get_last_cycles(void) {
     return g_last_cycles;
 }
+'''
+    with open(path, "w") as f:
+        f.write(new_content)
+    print("Modified kem_adapter.c")
+
+if __name__ == "__main__":
+    modify_platformio_ini()
+    modify_kem_adapter_h()
+    modify_kem_adapter_c()
+    print("All modifications applied successfully.")

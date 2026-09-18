@@ -1,7 +1,7 @@
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "dma_isr_handler.h"
-#include "transport.c"
+#include "transport.h"
 #include <stdint.h>
 #include <string.h>
 
