@@ -39,15 +39,23 @@ static uint32_t get_peak_sram(void) {
 }
 
 static uint32_t get_min_free_heap(void) {
-    return 0;
+    return xPortGetFreeHeapSize();
 }
 
 static uint32_t get_largest_free_block(void) {
-    return 0;
+    return xPortGetFreeHeapSize();
 }
 
 static int check_heap_zero(void) {
-    return 1;
+    extern uint8_t _sdata;
+    extern uint8_t _ebss;
+    extern uint8_t _estack;
+    
+    uint32_t static_used = (uint32_t)&_ebss - (uint32_t)&_sdata;
+    uint32_t heap_used = configTOTAL_HEAP_SIZE - xPortGetFreeHeapSize();
+    uint32_t total_dynamic = static_used + heap_used;
+    
+    return (total_dynamic == 0) ? 1 : 0;
 }
 
 void telemetry_init(void) {

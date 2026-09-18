@@ -88,6 +88,7 @@ static void dma_tx_config(uint8_t *buffer, uint16_t len) {
 
 pqc_status_t dma_transport_stm32_init(void) {
     __HAL_RCC_DMA1_CLK_ENABLE();
+    __HAL_RCC_ETH_CLK_ENABLE();
     HAL_NVIC_SetPriority(DMA1_Stream0_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
     HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);

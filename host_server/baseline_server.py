@@ -23,6 +23,8 @@ MSG_TYPE_MASK_CHUNK = 0x21
 MSG_TYPE_CLIENT_COMPLETE = 0x30
 MSG_TYPE_DROPOUT_NOTIFY = 0x31
 MSG_TYPE_RECOVERY_COMPLETE = 0x33
+MSG_TYPE_PAIRWISE_KEM_PUBKEY = 0x10
+MSG_TYPE_PAIRWISE_KEM_CIPHERTEXT = 0x11
 MSG_TYPE_ROUND_COMPLETE = 0x41
 
 HEADER_FORMAT = ">IIBBHHH"
@@ -128,7 +130,7 @@ class ClassicalProtocolBridge:
             0,
         )
 
-    async def _dispatch_message(
+async def _dispatch_message(
         self,
         header: MessageHeader,
         payload: bytes,
@@ -144,6 +146,31 @@ class ClassicalProtocolBridge:
             await self._handle_dropout_notify(header, payload)
         elif header.message_type == MSG_TYPE_ROUND_INIT:
             await self._handle_round_init(header, payload)
+        elif header.message_type == MSG_TYPE_PAIRWISE_KEM_PUBKEY:
+            await self._handle_pairwise_pubkey(header, payload, writer)
+        elif header.message_type == MSG_TYPE_PAIRWISE_KEM_CIPHERTEXT:
+            await self._handle_pairwise_ciphertext(header, payload)
+
+    async def _handle_pairwise_pubkey(self, header: MessageHeader, payload: bytes, writer: asyncio.StreamWriter):
+        round_state = self.rounds.get(header.round_id)
+        if not round_state:
+            return
+        client_state = round_state.clients.get(header.client_id)
+        if not client_state:
+            return
+        client_state.public_key = payload
+        self.client_writers[header.client_id] = writer
+
+    async def _handle_pairwise_ciphertext(self, header: MessageHeader, payload: bytes):
+        round_state = self.rounds.get(header.round_id)
+        if not round_state:
+            return
+        client_state = round_state.clients.get(header.client_id)
+        if not client_state:
+            return
+        if len(payload) >= 32:
+            client_state.shared_secret = payload[:32]
+
 
     async def _handle_round_init(
         self, header: MessageHeader, payload: bytes
@@ -293,6 +320,58 @@ class ClassicalProtocolBridge:
                 if writer:
                     writer.write(header + ct)
                     await writer.drain()
+        
+        client_ids = list(round_state.clients.keys())
+        for i, client_a_id in enumerate(client_ids):
+            client_a_state = round_state.clients[client_a_id]
+            for client_b_id in client_ids[i+1:]:
+                client_b_state = round_state.clients[client_b_id]
+                if client_a_state.shared_secret and client_b_state.shared_secret:
+                    continue
+                
+                if client_a_state.public_key and client_b_state.public_key:
+                    if client_a_id < client_b_id:
+                        initiator, responder = client_a_id, client_b_id
+                        initiator_state, responder_state = client_a_state, client_b_state
+                    else:
+                        initiator, responder = client_b_id, client_a_id
+                        initiator_state, responder_state = client_b_state, client_a_state
+                    
+                    if initiator_state.shared_secret and responder_state.shared_secret:
+                        continue
+                    
+                    if not initiator_state.shared_secret:
+                        ct, ss = self._encapsulate(initiator_state.public_key)
+                        initiator_state.shared_secret = ss
+                        header = self._build_header(
+                            MSG_TYPE_KEM_CIPHERTEXT,
+                            round_state.round_id,
+                            0,
+                            0,
+                            len(ct),
+                        )
+                        writer = self.client_writers.get(initiator)
+                        if writer:
+                            writer.write(header + ct)
+                            await writer.drain()
+                    
+                    if not responder_state.shared_secret:
+                        ct, ss = self._encapsulate(responder_state.public_key)
+                        responder_state.shared_secret = ss
+                        header = self._build_header(
+                            MSG_TYPE_KEM_CIPHERTEXT,
+                            round_state.round_id,
+                            0,
+                            0,
+                            len(ct),
+                        )
+                        writer = self.client_writers.get(responder)
+                        if writer:
+                            writer.write(header + ct)
+                            await writer.drain()
+        
+        await self._orchestrate_pairwise_kem(round_state)
+        
         for client_id, client_state in round_state.clients.items():
             if client_state.shared_secret:
                 for peer_id, peer_state in round_state.clients.items():
@@ -455,6 +534,61 @@ class ClassicalProtocolBridge:
             int(telemetry["final_accuracy"] * 255),
             0
         )
+
+
+    async def _orchestrate_pairwise_kem(self, round_state: RoundState):
+        client_ids = list(round_state.clients.keys())
+        for i, client_a_id in enumerate(client_ids):
+            client_a_state = round_state.clients[client_a_id]
+            for client_b_id in client_ids[i+1:]:
+                client_b_state = round_state.clients[client_b_id]
+                if not client_a_state.public_key or not client_b_state.public_key:
+                    continue
+                
+                if client_a_state.shared_secret and client_b_state.shared_secret:
+                    continue
+                
+                initiator = client_a_id if client_a_id < client_b_id else client_b_id
+                responder = client_b_id if client_a_id < client_b_id else client_a_id
+                initiator_state = round_state.clients[initiator]
+                responder_state = round_state.clients[responder]
+                
+                if not initiator_state.shared_secret:
+                    ct, ss = self._encapsulate(initiator_state.public_key)
+                    initiator_state.shared_secret = ss
+                    header = self._build_header(
+                        MSG_TYPE_KEM_CIPHERTEXT,
+                        round_state.round_id,
+                        0,
+                        0,
+                        len(ct),
+                    )
+                    writer = self.client_writers.get(initiator)
+                    if writer:
+                        writer.write(header + ct)
+                        await writer.drain()
+                
+                if not responder_state.shared_secret:
+                    ct, ss = self._encapsulate(responder_state.public_key)
+                    responder_state.shared_secret = ss
+                    header = self._build_header(
+                        MSG_TYPE_KEM_CIPHERTEXT,
+                        round_state.round_id,
+                        0,
+                        0,
+                        len(ct),
+                    )
+                    writer = self.client_writers.get(responder)
+                    if writer:
+                        writer.write(header + ct)
+                        await writer.drain()
+                
+                if initiator_state.shared_secret and responder_state.shared_secret:
+                    seed = self._derive_pairwise_seed(initiator_state.shared_secret, initiator, responder, round_state.round_id)
+                    round_state.clients[initiator].pairwise_seeds[responder] = seed
+                    round_state.clients[responder].pairwise_seeds[initiator] = seed
+
+
 
     def _compute_fedavg(self, round_state: RoundState, client_unmasked: Dict[int, Dict[int, List[int]]]) -> Dict[int, List[int]]:
         total_samples = sum(

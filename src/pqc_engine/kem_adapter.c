@@ -9,6 +9,7 @@
 #include <tinycrypt/aes.h>
 #include <tinycrypt/ccm_mode.h>
 #include <tinycrypt/constants.h>
+#include <assert.h>
 extern int pqcrystals_kyber512_ref_keypair(unsigned char *pk, unsigned char *sk);
 extern int pqcrystals_kyber512_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
 extern int pqcrystals_kyber512_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
@@ -18,6 +19,11 @@ extern int pqcrystals_kyber768_ref_dec(unsigned char *ss, const unsigned char *c
 extern int pqcrystals_kyber1024_ref_keypair(unsigned char *pk, unsigned char *sk);
 extern int pqcrystals_kyber1024_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
 extern int pqcrystals_kyber1024_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+
+static void test_kat512(void);
+static void test_kat768(void);
+static void test_kat1024(void);
+static void test_kem_kat_vectors(void);
 
 
 
@@ -380,6 +386,9 @@ pqc_status_t kem_adapter_self_test(void) {
     crypto_zeroize(&kp, sizeof(kp));
     crypto_zeroize(&enc, sizeof(enc));
     crypto_zeroize(ss, 32);
+
+    test_kem_kat_vectors();
+
     return PQC_SUCCESS;
 }
 
