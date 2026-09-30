@@ -44,7 +44,7 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
         for j, (xj, _) in enumerate(shares):
             if i == j:
                 continue
-            numerator = (numerator * xj) % p
+            numerator = (numerator * (-xj)) % p
             denominator = (denominator * ((xi - xj) % p)) % p
         
         lagrange_coeff = (numerator * mod_inv(denominator, p)) % p

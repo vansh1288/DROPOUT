@@ -6,16 +6,22 @@
 #include <stddef.h>
 
 typedef struct {
-    uint8_t key[32];
+    struct tc_aes_key_sched_struct sched;
     uint8_t nonce[16];
-    uint32_t counter;
-    uint8_t block[16];
-    size_t block_pos;
+    uint8_t ctr[16];
+    int initialized;
 } mask_prg_ctx_t;
 
-void mask_prg_init(const uint8_t seed[32]);
-void mask_prg_reseed(const uint8_t seed[32]);
-void mask_prg_expand(uint8_t* out, size_t len);
-void mask_prg_get_bytes(uint8_t* out, size_t len);
+void mask_prg_init(mask_prg_ctx_t* ctx, const uint8_t seed[32]);
+void mask_prg_reseed(mask_prg_ctx_t* ctx, const uint8_t seed[32]);
+void mask_prg_get_bytes(mask_prg_ctx_t* ctx, uint8_t* out, size_t len);
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

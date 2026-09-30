@@ -30,6 +30,7 @@ MSG_TYPE_MASK_CHUNK = 0x21
 MSG_TYPE_CLIENT_COMPLETE = 0x30
 MSG_TYPE_DROPOUT_NOTIFY = 0x31
 MSG_TYPE_RECOVERY_COMPLETE = 0x33
+MSG_TYPE_SHAMIR_SHARE = 0x32
 MSG_TYPE_PAIRWISE_KEM_PUBKEY = 0x10
 MSG_TYPE_PAIRWISE_KEM_CIPHERTEXT = 0x11
 MSG_TYPE_ROUND_COMPLETE = 0x41
@@ -157,6 +158,8 @@ class ProtocolBridge:
             await self._handle_pairwise_pubkey(header, payload, writer)
         elif header.message_type == MSG_TYPE_PAIRWISE_KEM_CIPHERTEXT:
             await self._handle_pairwise_ciphertext(header, payload)
+        elif header.message_type == MSG_TYPE_SHAMIR_SHARE:
+            await self._handle_shamir_share(header, payload)
 
     async def _handle_round_init(
         self, header: MessageHeader, payload: bytes
@@ -227,6 +230,17 @@ class ProtocolBridge:
         await self._trigger_recovery(round_state)
         await self._check_round_completion(round_state)
 
+    async def _handle_shamir_share(self, header: MessageHeader, payload: bytes):
+        round_state = self.rounds.get(header.round_id)
+        if not round_state:
+            return
+        client_state = round_state.clients.get(header.client_id)
+        if not client_state:
+            return
+        if not hasattr(client_state, 'shamir_shares'):
+            client_state.shamir_shares = []
+        client_state.shamir_shares.append(payload)
+
     def _hkdf_extract(self, salt: bytes, ikm: bytes) -> bytes:
         if not salt:
             salt = bytes(32)
@@ -274,7 +288,7 @@ class ProtocolBridge:
             raise RuntimeError("cryptography library not available")
         cipher = Cipher(algorithms.AES(key), modes.CTR(nonce), backend=default_backend())
         encryptor = cipher.encryptor()
-        return encryptor.update(b" " * length) + encryptor.finalize()
+        return encryptor.update(b"" * length) + encryptor.finalize()
 
     def _generate_mask_from_seed(self, seed: bytes, length: int) -> List[int]:
         stream = self._aes_ctr_stream(seed, bytes(16), length)
@@ -390,7 +404,7 @@ class ProtocolBridge:
                 await writer.drain()
 
     async def _trigger_recovery(self, round_state: RoundState):
-        from shamir_recovery import reconstruct_secret_bytes
+        from shamir_recovery import reconstruct_secret_bytes, recover_dropped_client_masks
         for dropout_id in round_state.dropout_clients:
             shares = []
             for client_id, client_state in round_state.clients.items():
@@ -402,6 +416,64 @@ class ProtocolBridge:
             if len(shares) >= round_state.threshold:
                 recovered = reconstruct_secret_bytes(shares)
                 round_state.clients[dropout_id].shared_secret = recovered
+
+    async def _finalize_aggregation(self, round_state: RoundState):
+        num_chunks = round_state.model_size // round_state.chunk_size
+        chunk_elements = round_state.chunk_size
+        fedavg_chunks: Dict[int, List[int]] = {}
+        for i in range(num_chunks):
+            fedavg_chunks[i] = [0] * chunk_elements
+
+        surviving_clients = [cid for cid in round_state.clients.keys() if cid not in round_state.dropout_clients]
+        
+        for client_id in surviving_clients:
+            client_state = round_state.clients[client_id]
+            if not client_state.completed:
+                continue
+            for seq_num, chunk_data in client_state.received_chunks.items():
+                if seq_num >= num_chunks:
+                    continue
+                values = struct.unpack(f">{chunk_elements}h", chunk_data)
+                weight = client_state.sample_count if client_state.sample_count > 0 else 1
+                for j, val in enumerate(values):
+                    fedavg_chunks[seq_num][j] = (fedavg_chunks[seq_num][j] + val * weight) % FIELD_MODULUS
+
+        for dropout_id in round_state.dropout_clients:
+            dropout_state = round_state.clients.get(dropout_id)
+            if not dropout_state or not dropout_state.shared_secret:
+                continue
+            all_peer_ids = [cid for cid in round_state.clients.keys() if cid != dropout_id]
+            recovered_masks = recover_dropped_client_masks(
+                dropout_state.shared_secret,
+                round_state.round_id,
+                all_peer_ids,
+                dropout_id,
+                num_chunks,
+                chunk_elements
+            )
+            for seq_num, chunk_data in dropout_state.received_chunks.items():
+                if seq_num >= num_chunks:
+                    continue
+                values = struct.unpack(f">{chunk_elements}h", chunk_data)
+                unmasked = [(values[i] + recovered_masks[seq_num][i]) % FIELD_MODULUS for i in range(chunk_elements)]
+                weight = dropout_state.sample_count if dropout_state.sample_count > 0 else 1
+                for j, val in enumerate(unmasked):
+                    fedavg_chunks[seq_num][j] = (fedavg_chunks[seq_num][j] + val * weight) % FIELD_MODULUS
+
+        total_samples = sum(
+            c.sample_count for c in round_state.clients.values()
+            if c.completed and c.sample_count > 0
+        )
+        if total_samples == 0:
+            total_samples = sum(1 for c in round_state.clients.values() if c.completed)
+        if total_samples > 1:
+            inv_total = pow(total_samples, FIELD_MODULUS - 2, FIELD_MODULUS)
+            for seq_num in range(num_chunks):
+                for j in range(chunk_elements):
+                    fedavg_chunks[seq_num][j] = (fedavg_chunks[seq_num][j] * inv_total) % FIELD_MODULUS
+
+        round_state.unmasked_chunks = fedavg_chunks
+        round_state.stage = "ROUND_COMPLETE"
 
     def _unmask_client_chunks(self, round_state: RoundState) -> Dict[int, Dict[int, List[int]]]:
         num_chunks = round_state.model_size // round_state.chunk_size
@@ -446,19 +518,12 @@ class ProtocolBridge:
     async def _unmask_and_aggregate(self, round_state: RoundState):
         await self._setup_keys_and_masks(round_state)
         await self._trigger_recovery(round_state)
-        client_unmasked = self._unmask_client_chunks(round_state)
-        fedavg_chunks = self._compute_fedavg(round_state, client_unmasked)
+        await self._finalize_aggregation(round_state)
         
-        for seq_num in range(round_state.model_size // round_state.chunk_size):
-            if seq_num not in fedavg_chunks:
-                return
-        
-        round_state.unmasked_chunks = fedavg_chunks
-        round_state.stage = "ROUND_COMPLETE"
-
         telemetry = self._collect_telemetry(round_state)
         telemetry_payload = self._pack_telemetry(telemetry)
         
+        fedavg_chunks = round_state.unmasked_chunks
         for client_id, writer in self.client_writers.items():
             for seq_num in range(round_state.model_size // round_state.chunk_size):
                 chunk_elements = round_state.chunk_size

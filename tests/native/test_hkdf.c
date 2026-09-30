@@ -21,10 +21,10 @@ static void test_hkdf_rfc5869_vector1(void) {
                                 0xca,0xc2,0x6b,0xd5,0x06,0xa9,0x3a,0x3c,
                                 0x13,0x71};
 
-    hkdf_sha256_extract(salt, 13, ikm, 22, okm);
+    assert(hkdf_sha256_extract(salt, 13, ikm, 22, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
-    hkdf_sha256_expand(okm, 32, info, 10, okm, 42);
+    assert(hkdf_sha256_expand(okm, 32, info, 10, okm, 42) == 0);
     assert(memcmp(okm, expected_okm, 42) == 0);
 }
 
@@ -55,10 +55,10 @@ static void test_hkdf_rfc5869_vector2(void) {
                                 0x4d,0x3e,0x2f,0x1a,0x0b,0x4c,0x3d,0x2e,
                                 0x1f,0x0a,0x4b,0x3c,0x2d,0x1e,0x0f};
 
-    hkdf_sha256_extract(salt, 13, ikm, 80, okm);
+    assert(hkdf_sha256_extract(salt, 13, ikm, 80, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
-    hkdf_sha256_expand(okm, 32, info, 10, okm, 82);
+    assert(hkdf_sha256_expand(okm, 32, info, 10, okm, 82) == 0);
     assert(memcmp(okm, expected_okm, 82) == 0);
 }
 
@@ -79,10 +79,10 @@ static void test_hkdf_rfc5869_vector3(void) {
                                 0x0f,0x4a,0x3b,0x2c,0x1d,0x0e,0x4f,0x3a,
                                 0x2b,0x1c,0x0d,0x4e,0x3f,0x2a,0x1b,0x0c};
 
-    hkdf_sha256_extract(salt, 16, ikm, 16, okm);
+    assert(hkdf_sha256_extract(salt, 16, ikm, 16, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
-    hkdf_sha256_expand(okm, 32, info, 16, okm, 32);
+    assert(hkdf_sha256_expand(okm, 32, info, 16, okm, 32) == 0);
     assert(memcmp(okm, expected_okm, 32) == 0);
 }
 
@@ -92,17 +92,50 @@ static void test_hkdf_rfc5869_vector4(void) {
                        0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,
                        0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,
                        0x0c,0x0c};
-    uint8_t salt[0] = {};
-    uint8_t info[0] = {};
     uint8_t okm[32];
     uint8_t expected_okm[32] = {0x41,0x5f,0x2e,0x3d,0x4c,0x5a,0x6b,0x7c,
                                 0x8d,0x9e,0xaf,0xb0,0xc1,0xd2,0xe3,0xf4,
                                 0x05,0x16,0x27,0x38,0x49,0x5a,0x6b,0x7c,
                                 0x8d,0x9e,0xaf,0xb0,0xc1,0xd2,0xe3,0xf4};
 
-    hkdf_sha256_extract(NULL, 0, ikm, 32, okm);
-    hkdf_sha256_expand(okm, 32, NULL, 0, okm, 32);
+    assert(hkdf_sha256_extract(NULL, 0, ikm, 32, okm) == 0);
+    assert(hkdf_sha256_expand(okm, 32, NULL, 0, okm, 32) == 0);
     assert(memcmp(okm, expected_okm, 32) == 0);
+}
+
+static void test_hkdf_combined_api(void) {
+    uint8_t ikm[22] = {0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,
+                       0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,0x0b,
+                       0x0b,0x0b};
+    uint8_t salt[13] = {0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,
+                        0x0a,0x0b,0x0c};
+    uint8_t info[10] = {0xf0,0xf1,0xf2,0xf3,0xf4,0xf5,0xf6,0xf7,0xf8,0xf9};
+    uint8_t okm[42];
+    uint8_t expected_okm[42] = {0x3c,0xb2,0x5f,0x25,0xfa,0xac,0xd5,0x7a,
+                                0x90,0x43,0x4f,0x64,0xd0,0x36,0x2f,0x2a,
+                                0x2d,0x2d,0x0a,0x90,0xcf,0xa1,0x5b,0x84,
+                                0x42,0x3c,0x1d,0x46,0x5d,0xc8,0x26,0x12,
+                                0xca,0xc2,0x6b,0xd5,0x06,0xa9,0x3a,0x3c,
+                                0x13,0x71};
+
+    assert(hkdf_sha256(salt, 13, ikm, 22, info, 10, okm, 42) == 0);
+    assert(memcmp(okm, expected_okm, 42) == 0);
+}
+
+static void test_hkdf_error_cases(void) {
+    uint8_t ikm[32] = {0};
+    uint8_t salt[32] = {0};
+    uint8_t info[10] = {0};
+    uint8_t okm[32];
+    uint8_t prk[32];
+
+    assert(hkdf_sha256_extract(NULL, 0, NULL, 32, prk) == -1);
+    assert(hkdf_sha256_extract(salt, 32, ikm, 32, NULL) == -1);
+    assert(hkdf_sha256_expand(NULL, 32, info, 10, okm, 32) == -1);
+    assert(hkdf_sha256_expand(prk, 32, info, 10, NULL, 32) == -1);
+    assert(hkdf_sha256_expand(prk, 16, info, 10, okm, 32) == -1);
+    assert(hkdf_sha256_expand(prk, 32, info, 10, okm, HKDF_SHA256_MAX_OUTPUT_LEN + 1) == -1);
+    assert(hkdf_sha256(NULL, 0, NULL, 32, info, 10, okm, 32) == -1);
 }
 
 int main(void) {
@@ -110,5 +143,7 @@ int main(void) {
     test_hkdf_rfc5869_vector2();
     test_hkdf_rfc5869_vector3();
     test_hkdf_rfc5869_vector4();
+    test_hkdf_combined_api();
+    test_hkdf_error_cases();
     return 0;
 }
