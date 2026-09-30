@@ -80,9 +80,9 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
     );
     if (ret != PQC_SUCCESS) return ret;
 
-    mask_prg_init(stream_seed);
+    mask_prg_simple_init(stream_seed);
     int16_t mask[CHUNK_BUFFER_BYTES / 2];
-    mask_prg_expand((uint8_t*)mask, chunk_size);
+    mask_prg_simple_expand((uint8_t*)mask, chunk_size);
 
     int16_t* input = (int16_t*)chunk_buf->data;
     int16_t* output = (int16_t*)dma_tx->ping;
@@ -111,9 +111,9 @@ pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id
     );
     if (ret != PQC_SUCCESS) return ret;
 
-    mask_prg_init(stream_seed);
+    mask_prg_simple_init(stream_seed);
     int16_t mask[CHUNK_BUFFER_BYTES / 2];
-    mask_prg_expand((uint8_t*)mask, chunk_size);
+    mask_prg_simple_expand((uint8_t*)mask, chunk_size);
 
     int16_t* input = (int16_t*)chunk_buf->data;
     int16_t* output = (int16_t*)dma_tx->ping;

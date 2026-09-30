@@ -2,6 +2,7 @@
 #include "memory_scratchpad.h"
 #include "kem_adapter.h"
 #include "mask_protocol.h"
+#include "shamir.h"
 #include "dropout_protocol.h"
 #include "packet_codec.h"
 #include "FreeRTOS.h"
@@ -202,14 +203,27 @@ pqc_status_t state_machine_handle_completion(client_protocol_ctx_t* ctx, const m
     );
     if (ret != PQC_SUCCESS) return ret;
 
-    shamir_share_t shares[MAX_CLIENTS];
-    ret = shamir_gen_shares(
-        shamir_secret, ctx->shamir_ctx.threshold,
-        ctx->shamir_ctx.num_shares, shares
+    uint8_t share_x[MAX_CLIENTS];
+    uint8_t share_y_buf[MAX_CLIENTS][SHAMIR_SHARE_VALUE_BYTES];
+    uint8_t* share_y[MAX_CLIENTS];
+    for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
+        share_y[i] = share_y_buf[i];
+    }
+    uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
+
+    ret = shamir_share_bytes(
+        shamir_secret, SHAMIR_SHARE_VALUE_BYTES,
+        share_x, share_y,
+        ctx->shamir_ctx.num_shares, ctx->shamir_ctx.threshold,
+        workspace
     );
-    if (ret != PQC_SUCCESS) return ret;
+    if (ret != 0) return ERR_SHAMIR_ENCODE_FAILED;
 
     for (uint8_t i = 0; i < ctx->shamir_ctx.num_shares; i++) {
+        shamir_share_t share;
+        share.share_id = share_x[i];
+        memcpy(share.value, share_y[i], SHAMIR_SHARE_VALUE_BYTES);
+
         msg_header_t share_hdr = {
             .protocol_version = PROTOCOL_VERSION,
             .round_id = ctx->current_round_id,
@@ -220,7 +234,7 @@ pqc_status_t state_machine_handle_completion(client_protocol_ctx_t* ctx, const m
             .reserved = 0
         };
         protocol_state_buffer_t* proto = get_proto_state();
-        pqc_status_t send_ret = packet_codec_encode_message(&share_hdr, (uint8_t*)&shares[i], ctx->session_key, proto->data, &proto->data[0]);
+        pqc_status_t send_ret = packet_codec_encode_message(&share_hdr, (uint8_t*)&share, ctx->session_key, proto->data, &proto->data[0]);
         (void)send_ret;
     }
 

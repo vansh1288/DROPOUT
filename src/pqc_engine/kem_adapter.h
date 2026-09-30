@@ -17,8 +17,6 @@
 #define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
 #define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
 
-#define KEMLIB_ML_KEM_X25519 3
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -36,10 +34,6 @@ pqc_status_t kem_adapter_derive_shamir_secret(const uint8_t* shared_secret, uint
 pqc_status_t kem_adapter_zeroize_scratchpad(void);
 pqc_status_t kem_adapter_self_test(void);
 uint32_t kem_adapter_get_last_cycles(void);
-
-pqc_status_t classical_x25519_keypair(uint8_t* pk, uint8_t* sk);
-pqc_status_t classical_x25519_encap(uint8_t* ct, uint8_t* ss, const uint8_t* pk);
-pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_t* sk);
 
 #ifdef __cplusplus
 }

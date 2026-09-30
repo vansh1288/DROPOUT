@@ -16,6 +16,10 @@ void mask_prg_init(mask_prg_ctx_t* ctx, const uint8_t seed[32]);
 void mask_prg_reseed(mask_prg_ctx_t* ctx, const uint8_t seed[32]);
 void mask_prg_get_bytes(mask_prg_ctx_t* ctx, uint8_t* out, size_t len);
 
+/* Backward-compatible simple API for legacy callers */
+void mask_prg_simple_init(const uint8_t seed[32]);
+void mask_prg_simple_expand(uint8_t* out, size_t len);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

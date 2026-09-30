@@ -90,6 +90,18 @@ Using deterministic seed = [0,1,2,...,47]:
 | ML-KEM-768 | ✅ | ✅ | ✅ | ✅ |
 | ML-KEM-1024 | ✅ | ✅ | ✅ | ✅ |
 
+### Expected Shamir Test Behavior
+
+| Test Case | Description | Expected |
+|-----------|-------------|----------|
+| `test_shamir_3_of_5_reconstruction` | 3-of-5 threshold reconstruction | ✅ PASS |
+| `test_shamir_2_of_5_failed_reconstruction` | 2-of-5 insufficient shares | ✅ PASS (rejects) |
+| `test_shamir_gf3329_field_operations` | Add, sub, mul, inv | ✅ PASS |
+| `test_shamir_different_thresholds` | 4-of-7 threshold | ✅ PASS |
+| `test_shamir_zero_secret` | All-zero secret | ✅ PASS |
+| `test_shamir_bytes_api` | 64-byte share format | ✅ PASS |
+| `test_shamir_deterministic_reproducible` | Same seed = same shares | ✅ PASS |
+
 ---
 
 ## Integration Tests (Not Yet Implemented)
@@ -111,6 +123,8 @@ Using deterministic seed = [0,1,2,...,47]:
 3. **AES-CTR NIST vector mismatch** - cryptography library uses different counter initialization
 4. **X25519 fallback** - Non-standard KEM construction, marked deprecated
 5. **Side-channel resistance** - Not evaluated (reference implementations only)
+6. **Duplicate Shamir implementations** - `shamir.c` (CSPRNG) vs `dropout_protocol.c` (HKDF-derived)
+7. **ESP32-C3 RNG not implemented** - `randombytes()` falls back to deterministic PRNG
 
 ---
 
@@ -123,14 +137,23 @@ Using deterministic seed = [0,1,2,...,47]:
 - [ ] Embedded target builds (STM32F4, ESP32-C3)
 - [ ] Stack/heap usage measurement on target
 - [ ] Timing attack evaluation on target hardware
+- [ ] ESP32-C3 hardware RNG integration (`esp_fill_random()`)
+- [ ] Resolve duplicate Shamir implementations
+- [ ] Fix `SHAMIR_SHARE_VALUE_BYTES` constant (32 → 64)
 
 ---
 
 ## Test Commands (When Compiler Available)
 
 ```bash
-# Native build and test
-pio run -e native -t test
+# Shamir tests with deterministic RNG
+pio run -e native_test -t test
+
+# ML-KEM KAT tests  
+pio run -e native_test_kem -t test
+
+# HKDF tests
+pio run -e native_test_hkdf -t test
 
 # Cortex-M4 build
 pio run -e cortex_m4
