@@ -5,6 +5,32 @@
 #define BARRETT_MULTIPLIER 20159
 #define BARRETT_SHIFT 26
 
+extern int randombytes(uint8_t *output, size_t n);
+
+#if defined(SHAMIR_DETERMINISTIC_RNG)
+static uint8_t g_test_rng_seed[48] = {0};
+static size_t g_test_rng_pos = 0;
+
+static int test_randombytes(uint8_t *output, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        output[i] = g_test_rng_seed[g_test_rng_pos++ % sizeof(g_test_rng_seed)];
+    }
+    return 0;
+}
+
+#define RNG_FUNC test_randombytes
+
+void shamir_test_rng_init(const uint8_t seed[48]) {
+    if (seed) {
+        memcpy(g_test_rng_seed, seed, 48);
+    }
+    g_test_rng_pos = 0;
+}
+
+#else
+#define RNG_FUNC randombytes
+#endif
+
 static inline uint16_t barrett_reduce(uint32_t a) {
     uint32_t t = (a * BARRETT_MULTIPLIER) >> BARRETT_SHIFT;
     uint16_t r = (uint16_t)(a - t * FIELD_MODULUS);
@@ -51,6 +77,19 @@ uint16_t gf3329_evaluate_polynomial(const uint16_t* coeffs, uint8_t degree, uint
     return result;
 }
 
+static int generate_random_coefficients(uint16_t* coeffs, size_t count) {
+    uint8_t buffer[2];
+    for (size_t i = 0; i < count; i++) {
+        int ret = RNG_FUNC(buffer, 2);
+        if (ret != 0) {
+            return ret;
+        }
+        uint16_t val = (uint16_t)(buffer[0] | (buffer[1] << 8));
+        coeffs[i] = val % FIELD_MODULUS;
+    }
+    return 0;
+}
+
 int shamir_share(const uint16_t* secret, uint8_t secret_elements, uint16_t* share_x, uint16_t** share_y, uint8_t n, uint8_t t, uint16_t* workspace) {
     if (!secret || !share_x || !share_y || !workspace) return -1;
     if (n < t || t == 0 || n > SHAMIR_MAX_SHARES) return -1;
@@ -61,8 +100,11 @@ int shamir_share(const uint16_t* secret, uint8_t secret_elements, uint16_t* shar
 
     for (uint8_t elem = 0; elem < secret_elements; elem++) {
         coeffs[elem * t] = secret[elem];
-        for (uint8_t i = 1; i < t; i++) {
-            coeffs[elem * t + i] = (uint16_t)(rand() % FIELD_MODULUS);
+        if (t > 1) {
+            int ret = generate_random_coefficients(&coeffs[elem * t + 1], t - 1);
+            if (ret != 0) {
+                return ret;
+            }
         }
     }
 
@@ -80,9 +122,6 @@ int shamir_reconstruct(uint16_t* secret, const uint16_t* share_x, uint16_t** sha
     if (!secret || !share_x || !share_y || !workspace) return -1;
     if (k < 2 || k > SHAMIR_MAX_SHARES) return -1;
 
-    uint16_t* numerators = workspace;
-    uint16_t* denominators = workspace + k;
-
     for (uint8_t elem = 0; elem < 32; elem++) {
         for (uint8_t i = 0; i < k; i++) {
             uint16_t num = 1;
@@ -93,7 +132,7 @@ int shamir_reconstruct(uint16_t* secret, const uint16_t* share_x, uint16_t** sha
             for (uint8_t j = 0; j < k; j++) {
                 if (i == j) continue;
                 uint16_t xj = share_x[j];
-                num = gf3329_mul(num, xj);
+                num = gf3329_mul(num, gf3329_sub(0, xj));
                 uint16_t diff = gf3329_sub(xi, xj);
                 den = gf3329_mul(den, diff);
             }
