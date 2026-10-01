@@ -1,0 +1,3 @@
+[submodule "deps/pqm4"]
+	path = deps/pqm4
+	url = https://github.com/mupq/pqm4
