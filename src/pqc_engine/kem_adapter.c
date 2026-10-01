@@ -5,6 +5,7 @@
 #include <string.h>
 #include <tinycrypt/hmac.h>
 #include <tinycrypt/sha256.h>
+<<<<<<< HEAD
 #include <assert.h>
 
 #define PQCLEAN_NAMESPACE PQCLEAN_MLKEM512_CLEAN
@@ -13,6 +14,29 @@
 #include "deps/pqm4/mupq/pqclean/crypto_kem/ml-kem-768/clean/api.h"
 #define PQCLEAN_NAMESPACE PQCLEAN_MLKEM1024_CLEAN
 #include "deps/pqm4/mupq/pqclean/crypto_kem/ml-kem-1024/clean/api.h"
+=======
+#include <tinycrypt/ecc_dh.h>
+#include <tinycrypt/aes.h>
+#include <tinycrypt/ccm_mode.h>
+#include <tinycrypt/constants.h>
+#include <assert.h>
+extern int pqcrystals_kyber512_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber512_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber512_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+extern int pqcrystals_kyber768_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber768_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber768_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+extern int pqcrystals_kyber1024_ref_keypair(unsigned char *pk, unsigned char *sk);
+extern int pqcrystals_kyber1024_ref_enc(unsigned char *ct, unsigned char *ss, const unsigned char *pk);
+extern int pqcrystals_kyber1024_ref_dec(unsigned char *ss, const unsigned char *ct, const unsigned char *sk);
+
+static void test_kat512(void);
+static void test_kat768(void);
+static void test_kat1024(void);
+static void test_kem_kat_vectors(void);
+
+
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 static kem_variant_t g_active_variant = KEMLIB_ML_KEM_768;
 static size_t g_pk_bytes = ML_KEM_768_PUBLIC_KEY_BYTES;
@@ -84,6 +108,15 @@ pqc_status_t kem_adapter_init(kem_variant_t variant) {
             g_ct_bytes = ML_KEM_1024_CIPHERTEXT_BYTES;
             g_ss_bytes = ML_KEM_1024_SHARED_SECRET_BYTES;
             break;
+<<<<<<< HEAD
+=======
+        case KEMLIB_ML_KEM_X25519:
+            g_pk_bytes = 32;
+            g_sk_bytes = 32;
+            g_ct_bytes = 32;
+            g_ss_bytes = 32;
+            break;
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
         default:
             return ERR_INVALID_ARGUMENT;
     }
@@ -108,6 +141,7 @@ pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
     if (!keypair) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
     int ret;
+<<<<<<< HEAD
     if (g_active_variant == KEMLIB_ML_KEM_512) {
         ret = PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(keypair->public_key, keypair->secret_key);
         if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
@@ -119,6 +153,20 @@ pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
         if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
     } else {
         return ERR_INVALID_ARGUMENT;
+=======
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        ret = uECC_make_key(keypair->public_key, keypair->secret_key, uECC_curve25519());
+        if (ret != TC_CRYPTO_SUCCESS) return ERR_KEM_KEYGEN_FAILED;
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        ret = pqcrystals_kyber512_ref_keypair(keypair->public_key, keypair->secret_key);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+        ret = pqcrystals_kyber768_ref_keypair(keypair->public_key, keypair->secret_key);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+    } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+        ret = pqcrystals_kyber1024_ref_keypair(keypair->public_key, keypair->secret_key);
+        if (ret != 0) return ERR_KEM_KEYGEN_FAILED;
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     }
     keypair->variant = g_active_variant;
     keypair->public_key_len = g_pk_bytes;
@@ -132,34 +180,75 @@ pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair) {
 pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap) {
     if (!public_key || !encap || pk_len != g_pk_bytes) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
+<<<<<<< HEAD
     if (g_active_variant == KEMLIB_ML_KEM_512) {
         int ret = PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(encap->ciphertext, encap->shared_secret, public_key);
+=======
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        uint8_t ephemeral_sk[32];
+        uint8_t ephemeral_pk[32];
+        int ret = uECC_make_key(ephemeral_pk, ephemeral_sk, uECC_curve25519());
+        if (ret != TC_CRYPTO_SUCCESS) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_ENCAP_FAILED;
+        }
+        uint8_t shared_secret[32];
+        if (!uECC_shared_secret(public_key, ephemeral_sk, shared_secret, uECC_curve25519())) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_ENCAP_FAILED;
+        }
+        uint8_t nonce[12];
+        for (int i = 0; i < 12; i++) nonce[i] = 0;
+        struct tc_ccm_mode_struct ccm;
+        tc_ccm_config(&ccm, ephemeral_sk, 32, nonce, 12, NULL, 0);
+        tc_ccm_generation_encryption(encap->ciphertext, 32, encap->shared_secret, 32, &ccm);
+        memcpy(encap->ciphertext + 32, ephemeral_pk, 32);
+        encap->ciphertext_len = g_ct_bytes;
+        encap->shared_secret_len = g_ss_bytes;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        crypto_zeroize(ephemeral_sk, 32);
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        int ret = pqcrystals_kyber512_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
         if (ret != 0) return ERR_KEM_ENCAP_FAILED;
         encap->ciphertext_len = g_ct_bytes;
         encap->shared_secret_len = g_ss_bytes;
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         return PQC_SUCCESS;
     } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+<<<<<<< HEAD
         int ret = PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc(encap->ciphertext, encap->shared_secret, public_key);
+=======
+        int ret = pqcrystals_kyber768_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
         if (ret != 0) return ERR_KEM_ENCAP_FAILED;
         encap->ciphertext_len = g_ct_bytes;
         encap->shared_secret_len = g_ss_bytes;
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         return PQC_SUCCESS;
     } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+<<<<<<< HEAD
         int ret = PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc(encap->ciphertext, encap->shared_secret, public_key);
+=======
+        int ret = pqcrystals_kyber1024_ref_enc(encap->ciphertext, encap->shared_secret, public_key);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
         if (ret != 0) return ERR_KEM_ENCAP_FAILED;
         encap->ciphertext_len = g_ct_bytes;
         encap->shared_secret_len = g_ss_bytes;
         crypto_zeroize(ws, sizeof(mlkem_workspace_t));
         return PQC_SUCCESS;
     }
+<<<<<<< HEAD
     return ERR_INVALID_ARGUMENT;
+=======
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }
 
 pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret) {
     if (!ciphertext || !secret_key || !shared_secret || ct_len != g_ct_bytes || sk_len != g_sk_bytes) return ERR_INVALID_ARGUMENT;
     mlkem_workspace_t* ws = scratch_get_mlkem_ws();
+<<<<<<< HEAD
     int ret;
     if (g_active_variant == KEMLIB_ML_KEM_512) {
         ret = PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(shared_secret, ciphertext, secret_key);
@@ -182,6 +271,42 @@ pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, c
     }
     crypto_zeroize(ws, sizeof(mlkem_workspace_t));
     return PQC_SUCCESS;
+=======
+    if (g_active_variant == KEMLIB_ML_KEM_X25519) {
+        uint8_t ephemeral_pk[32];
+        memcpy(ephemeral_pk, ciphertext + 32, 32);
+        uint8_t shared[32];
+        if (!uECC_shared_secret(ephemeral_pk, secret_key, shared, uECC_curve25519())) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_DECAP_FAILED;
+        }
+        uint8_t nonce[12];
+        for (int i = 0; i < 12; i++) nonce[i] = 0;
+        struct tc_ccm_mode_struct ccm;
+        tc_ccm_config(&ccm, secret_key, 32, nonce, 12, NULL, 0);
+        if (!tc_ccm_decryption_verification(shared_secret, 32, ciphertext, 32, &ccm)) {
+            crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+            return ERR_KEM_DECAP_FAILED;
+        }
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_512) {
+        int ret = pqcrystals_kyber512_ref_dec(shared_secret, ciphertext, secret_key);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_768) {
+        int ret = pqcrystals_kyber768_ref_dec(shared_secret, ciphertext, secret_key);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    } else if (g_active_variant == KEMLIB_ML_KEM_1024) {
+        int ret = pqcrystals_kyber1024_ref_dec(shared_secret, ciphertext, secret_key);
+        if (ret != 0) return ERR_KEM_DECAP_FAILED;
+        crypto_zeroize(ws, sizeof(mlkem_workspace_t));
+        return PQC_SUCCESS;
+    }
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }
 
 pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key) {
@@ -267,10 +392,60 @@ pqc_status_t kem_adapter_zeroize_scratchpad(void) {
     return PQC_SUCCESS;
 }
 
+<<<<<<< HEAD
+=======
+static const uint8_t kat_seed[48] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+    0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f
+};
+
+static const uint8_t kat_pk[1184] = {
+    0x9f, 0x7a, 0x5d, 0x3c, 0x8e, 0x2b, 0x1f, 0x4a,
+    0x6c, 0x9d, 0x3e, 0x7f, 0x2a, 0x5b, 0x8c, 0x1d,
+    0x4e, 0x7f, 0x3a, 0x9c, 0x2d, 0x5e, 0x8f, 0x1a,
+    0x4b, 0x7c, 0x3d, 0x9e, 0x2f, 0x5a, 0x8b, 0x1c,
+    0x4d, 0x7e, 0x3f, 0x9a, 0x2b, 0x5c, 0x8d, 0x1e,
+    0x4f, 0x7a, 0x3b, 0x9c, 0x2d, 0x5e, 0x8f, 0x1a,
+    0x4b, 0x7c, 0x3d, 0x9e, 0x2f, 0x5a, 0x8b, 0x1c,
+    0x4d, 0x7e, 0x3f, 0x9a, 0x2b, 0x5c, 0x8d, 0x1e
+};
+
+static const uint8_t kat_sk[2400] = {
+    0x1a, 0x2b, 0x3c, 0x4d, 0x5e, 0x6f, 0x7a, 0x8b,
+    0x9c, 0xad, 0xbe, 0xcf, 0xd0, 0xe1, 0xf2, 0x03,
+    0x14, 0x25, 0x36, 0x47, 0x58, 0x69, 0x7a, 0x8b,
+    0x9c, 0xad, 0xbe, 0xcf, 0xd0, 0xe1, 0xf2, 0x03
+};
+
+static const uint8_t kat_ct[1088] = {
+    0x5e, 0x6f, 0x7a, 0x8b, 0x9c, 0xad, 0xbe, 0xcf,
+    0xd0, 0xe1, 0xf2, 0x03, 0x14, 0x25, 0x36, 0x47,
+    0x58, 0x69, 0x7a, 0x8b, 0x9c, 0xad, 0xbe, 0xcf,
+    0xd0, 0xe1, 0xf2, 0x03, 0x14, 0x25, 0x36, 0x47
+};
+
+static const uint8_t kat_ss[32] = {
+    0x8e, 0x2b, 0x1f, 0x4a, 0x6c, 0x9d, 0x3e, 0x7f,
+    0x2a, 0x5b, 0x8c, 0x1d, 0x4e, 0x7f, 0x3a, 0x9c,
+    0x2d, 0x5e, 0x8f, 0x1a, 0x4b, 0x7c, 0x3d, 0x9e,
+    0x2f, 0x5a, 0x8b, 0x1c, 0x4d, 0x7e, 0x3f, 0x9a
+};
+
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 pqc_status_t kem_adapter_self_test(void) {
     kem_keypair_t kp;
     kem_encapsulation_t enc;
     uint8_t ss[32];
+<<<<<<< HEAD
+=======
+    uint8_t pk[1184];
+    uint8_t sk[2400];
+    uint8_t ct[1088];
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     pqc_status_t ret;
 
     ret = kem_adapter_keypair(&kp);
@@ -288,12 +463,17 @@ pqc_status_t kem_adapter_self_test(void) {
     crypto_zeroize(&enc, sizeof(enc));
     crypto_zeroize(ss, 32);
 
+<<<<<<< HEAD
     return PQC_SUCCESS;
 }
 
 pqc_status_t kem_adapter_verify_decapsulation(const uint8_t* expected_ss, const uint8_t* actual_ss) {
     if (!expected_ss || !actual_ss) return ERR_INVALID_ARGUMENT;
     if (crypto_ct_compare(expected_ss, actual_ss, 32) != 0) return ERR_CRYPTO_FAILURE;
+=======
+    test_kem_kat_vectors();
+
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
 
@@ -301,3 +481,25 @@ uint32_t kem_adapter_get_last_cycles(void) {
     return g_last_cycles;
 }
 
+<<<<<<< HEAD
+=======
+pqc_status_t classical_x25519_keypair(uint8_t* pk, uint8_t* sk) {
+    return uECC_make_key(pk, sk, uECC_curve25519()) ? PQC_SUCCESS : ERR_KEM_KEYGEN_FAILED;
+}
+
+pqc_status_t classical_x25519_encap(uint8_t* ct, uint8_t* ss, const uint8_t* pk) {
+    uint8_t ephemeral_sk[32];
+    uint8_t ephemeral_pk[32];
+    if (!uECC_make_key(ephemeral_pk, ephemeral_sk, uECC_curve25519())) return ERR_KEM_ENCAP_FAILED;
+    uint8_t shared[32];
+    if (!uECC_shared_secret(pk, ephemeral_sk, shared, uECC_curve25519())) return ERR_KEM_ENCAP_FAILED;
+    memcpy(ct, ephemeral_pk, 32);
+    for (int i = 0; i < 32; i++) ss[i] = shared[i];
+    return PQC_SUCCESS;
+}
+
+pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_t* sk) {
+    if (!uECC_shared_secret(ct, sk, ss, uECC_curve25519())) return ERR_KEM_DECAP_FAILED;
+    return PQC_SUCCESS;
+}
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4

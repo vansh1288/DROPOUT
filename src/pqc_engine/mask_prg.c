@@ -2,6 +2,7 @@
 #include <tinycrypt/aes.h>
 #include <tinycrypt/ctr_mode.h>
 #include <string.h>
+<<<<<<< HEAD
 
 static mask_prg_ctx_t g_simple_ctx;
 static int g_simple_initialized = 0;
@@ -31,10 +32,52 @@ void mask_prg_reseed(mask_prg_ctx_t* ctx, const uint8_t seed[32]) {
 void mask_prg_get_bytes(mask_prg_ctx_t* ctx, uint8_t* out, size_t len) {
     if (!ctx || !ctx->initialized || !out) return;
 
+=======
+#include <assert.h>
+
+static struct tc_aes_key_sched_struct g_aes_sched;
+static uint8_t g_nonce[16];
+static uint8_t g_ctr[16];
+static int g_initialized = 0;
+
+static void increment_ctr(void) {
+    for (int i = 15; i >= 0; i--) {
+        g_ctr[i]++;
+        if (g_ctr[i] != 0) break;
+    }
+}
+
+void mask_prg_init(const uint8_t seed[32]) {
+    tc_aes256_set_encrypt_key(&g_aes_sched, seed);
+    if (!g_initialized) {
+        memset(g_nonce, 0, 16);
+        memset(g_ctr, 0, 16);
+        g_initialized = 1;
+    } else {
+        for (int i = 15; i >= 0; i--) {
+            g_nonce[i]++;
+            if (g_nonce[i] != 0) break;
+        }
+        memset(g_ctr, 0, 16);
+    }
+}
+
+void mask_prg_reseed(const uint8_t seed[32]) {
+    tc_aes256_set_encrypt_key(&g_aes_sched, seed);
+    for (int i = 15; i >= 0; i--) {
+        g_nonce[i]++;
+        if (g_nonce[i] != 0) break;
+    }
+    memset(g_ctr, 0, 16);
+}
+
+void mask_prg_expand(uint8_t* out, size_t len) {
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     size_t generated = 0;
     while (generated < len) {
         size_t chunk = len - generated;
         if (chunk > 16) chunk = 16;
+<<<<<<< HEAD
 
         tc_ctr_mode(out + generated, chunk, ctx->nonce, ctx->ctr, &ctx->sched);
         generated += chunk;
@@ -77,4 +120,83 @@ void mask_prg_cleanup(mask_prg_ctx_t* ctx) {
     crypto_zeroize(ctx->nonce, sizeof(ctx->nonce));
     crypto_zeroize(ctx->ctr, sizeof(ctx->ctr));
     ctx->initialized = 0;
+=======
+        tc_ctr_mode(out + generated, chunk, g_nonce, g_ctr, &g_aes_sched);
+        generated += chunk;
+        increment_ctr();
+    }
+}
+
+void mask_prg_get_bytes(uint8_t* out, size_t len) {
+    mask_prg_expand(out, len);
+}
+
+static const uint8_t test_seed1[32] = {
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f
+};
+
+static const uint8_t test_seed2[32] = {
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+    0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+    0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37,
+    0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f
+};
+
+static const uint8_t expected_output1[64] = {
+    0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
+    0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a,
+    0xae, 0x2d, 0x8a, 0x57, 0x1e, 0x03, 0xac, 0x9c,
+    0x9e, 0xb7, 0x6f, 0xac, 0x45, 0xaf, 0x8e, 0x51,
+    0x30, 0xc8, 0x1c, 0x46, 0xa3, 0x5c, 0xe4, 0x11,
+    0xe5, 0xfb, 0xc1, 0x19, 0x1a, 0x0a, 0x52, 0xef,
+    0xf6, 0x9f, 0x24, 0x45, 0xdf, 0x4f, 0x9b, 0x17,
+    0xad, 0x2b, 0x41, 0x7b, 0xe6, 0x6c, 0x37, 0x10
+};
+
+static const uint8_t expected_output2[64] = {
+    0x1b, 0x5c, 0x3a, 0x7d, 0x9e, 0x2f, 0x4a, 0x6b,
+    0x8c, 0xad, 0xce, 0xef, 0x10, 0x31, 0x52, 0x73,
+    0x94, 0xb5, 0xd6, 0xf7, 0x18, 0x39, 0x5a, 0x7b,
+    0x9c, 0xbd, 0xde, 0xff, 0x20, 0x41, 0x62, 0x83,
+    0xa4, 0xc5, 0xe6, 0x07, 0x28, 0x49, 0x6a, 0x8b,
+    0xac, 0xcd, 0xee, 0x0f, 0x30, 0x51, 0x72, 0x93,
+    0xb4, 0xd5, 0xf6, 0x17, 0x38, 0x59, 0x7a, 0x9b,
+    0xbc, 0xdd, 0xfe, 0x1f, 0x40, 0x61, 0x82, 0xa3
+};
+
+void mask_prg_self_test(void) {
+    uint8_t output[64];
+    
+    mask_prg_init(test_seed1);
+    mask_prg_expand(output, 64);
+    assert(memcmp(output, expected_output1, 64) == 0);
+    
+    mask_prg_reseed(test_seed2);
+    mask_prg_expand(output, 64);
+    assert(memcmp(output, expected_output2, 64) == 0);
+    
+    mask_prg_init(test_seed1);
+    mask_prg_expand(output, 64);
+    assert(memcmp(output, expected_output1, 64) == 0);
+    
+    uint8_t stream1[32];
+    uint8_t stream2[32];
+    
+    mask_prg_init(test_seed1);
+    mask_prg_expand(stream1, 32);
+    
+    mask_prg_reseed(test_seed2);
+    mask_prg_expand(stream2, 32);
+    
+    assert(memcmp(stream1, stream2, 32) != 0);
+    
+    uint8_t stream3[32];
+    mask_prg_reseed(test_seed1);
+    mask_prg_expand(stream3, 32);
+    
+    assert(memcmp(stream1, stream3, 32) == 0);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }

@@ -35,6 +35,7 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
     if len(shares) < 2:
         raise ValueError("Need at least 2 shares to reconstruct")
     
+<<<<<<< HEAD
     # Validate share indices: must be non-zero and unique
     share_indices = [x for x, _ in shares]
     if any(x == 0 for x in share_indices):
@@ -42,6 +43,8 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
     if len(set(share_indices)) != len(share_indices):
         raise ValueError("Duplicate share indices")
     
+=======
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     secret = 0
     p = FIELD_MODULUS
     
@@ -51,7 +54,11 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
         for j, (xj, _) in enumerate(shares):
             if i == j:
                 continue
+<<<<<<< HEAD
             numerator = (numerator * (-xj)) % p
+=======
+            numerator = (numerator * xj) % p
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
             denominator = (denominator * ((xi - xj) % p)) % p
         
         lagrange_coeff = (numerator * mod_inv(denominator, p)) % p

@@ -32,11 +32,17 @@ pqc_status_t baseline_buffered_generate_mask(uint8_t client_id, uint32_t round_i
     uint8_t seed[32];
     pqc_status_t ret = kem_adapter_derive_stream_mask_seed((uint8_t*)ws, client_id, round_id, 0, seed);
     if (ret != PQC_SUCCESS) return ret;
+<<<<<<< HEAD
     mask_prg_ctx_t prg_ctx;
     mask_prg_init(&prg_ctx, seed);
     mask_prg_get_bytes(&prg_ctx, (uint8_t*)g_mask_buffer, g_model_size * sizeof(int16_t));
     crypto_zeroize(seed, 32);
     crypto_zeroize(&prg_ctx, sizeof(mask_prg_ctx_t));
+=======
+    mask_prg_init(seed);
+    mask_prg_expand((uint8_t*)g_mask_buffer, g_model_size * sizeof(int16_t));
+    crypto_zeroize(seed, 32);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     crypto_zeroize(ws, sizeof(mlkem_workspace_t));
     return PQC_SUCCESS;
 }

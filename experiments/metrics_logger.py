@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import csv
 import json
 import time
@@ -149,3 +150,6 @@ class MetricsLogger:
 
 def create_logger(run_id: str) -> MetricsLogger:
     return MetricsLogger(run_id)
+=======
+print("Running metrics logger") 
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4

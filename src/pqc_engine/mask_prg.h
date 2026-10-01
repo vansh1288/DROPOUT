@@ -6,6 +6,7 @@
 #include <stddef.h>
 
 typedef struct {
+<<<<<<< HEAD
     struct tc_aes_key_sched_struct sched;
     uint8_t nonce[16];
     uint8_t ctr[16];
@@ -30,5 +31,18 @@ extern "C" {
 #ifdef __cplusplus
 }
 #endif
+=======
+    uint8_t key[32];
+    uint8_t nonce[16];
+    uint32_t counter;
+    uint8_t block[16];
+    size_t block_pos;
+} mask_prg_ctx_t;
+
+void mask_prg_init(const uint8_t seed[32]);
+void mask_prg_reseed(const uint8_t seed[32]);
+void mask_prg_expand(uint8_t* out, size_t len);
+void mask_prg_get_bytes(uint8_t* out, size_t len);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 #endif

@@ -21,10 +21,17 @@ static void test_hkdf_rfc5869_vector1(void) {
                                 0xca,0xc2,0x6b,0xd5,0x06,0xa9,0x3a,0x3c,
                                 0x13,0x71};
 
+<<<<<<< HEAD
     assert(hkdf_sha256_extract(salt, 13, ikm, 22, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
     assert(hkdf_sha256_expand(okm, 32, info, 10, okm, 42) == 0);
+=======
+    hkdf_sha256_extract(salt, 13, ikm, 22, okm);
+    assert(memcmp(okm, expected_prk, 32) == 0);
+
+    hkdf_sha256_expand(okm, 32, info, 10, okm, 42);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     assert(memcmp(okm, expected_okm, 42) == 0);
 }
 
@@ -55,10 +62,17 @@ static void test_hkdf_rfc5869_vector2(void) {
                                 0x4d,0x3e,0x2f,0x1a,0x0b,0x4c,0x3d,0x2e,
                                 0x1f,0x0a,0x4b,0x3c,0x2d,0x1e,0x0f};
 
+<<<<<<< HEAD
     assert(hkdf_sha256_extract(salt, 13, ikm, 80, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
     assert(hkdf_sha256_expand(okm, 32, info, 10, okm, 82) == 0);
+=======
+    hkdf_sha256_extract(salt, 13, ikm, 80, okm);
+    assert(memcmp(okm, expected_prk, 32) == 0);
+
+    hkdf_sha256_expand(okm, 32, info, 10, okm, 82);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     assert(memcmp(okm, expected_okm, 82) == 0);
 }
 
@@ -79,10 +93,17 @@ static void test_hkdf_rfc5869_vector3(void) {
                                 0x0f,0x4a,0x3b,0x2c,0x1d,0x0e,0x4f,0x3a,
                                 0x2b,0x1c,0x0d,0x4e,0x3f,0x2a,0x1b,0x0c};
 
+<<<<<<< HEAD
     assert(hkdf_sha256_extract(salt, 16, ikm, 16, okm) == 0);
     assert(memcmp(okm, expected_prk, 32) == 0);
 
     assert(hkdf_sha256_expand(okm, 32, info, 16, okm, 32) == 0);
+=======
+    hkdf_sha256_extract(salt, 16, ikm, 16, okm);
+    assert(memcmp(okm, expected_prk, 32) == 0);
+
+    hkdf_sha256_expand(okm, 32, info, 16, okm, 32);
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     assert(memcmp(okm, expected_okm, 32) == 0);
 }
 
@@ -92,12 +113,18 @@ static void test_hkdf_rfc5869_vector4(void) {
                        0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,
                        0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,0x0c,
                        0x0c,0x0c};
+<<<<<<< HEAD
+=======
+    uint8_t salt[0] = {};
+    uint8_t info[0] = {};
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     uint8_t okm[32];
     uint8_t expected_okm[32] = {0x41,0x5f,0x2e,0x3d,0x4c,0x5a,0x6b,0x7c,
                                 0x8d,0x9e,0xaf,0xb0,0xc1,0xd2,0xe3,0xf4,
                                 0x05,0x16,0x27,0x38,0x49,0x5a,0x6b,0x7c,
                                 0x8d,0x9e,0xaf,0xb0,0xc1,0xd2,0xe3,0xf4};
 
+<<<<<<< HEAD
     assert(hkdf_sha256_extract(NULL, 0, ikm, 32, okm) == 0);
     assert(hkdf_sha256_expand(okm, 32, NULL, 0, okm, 32) == 0);
     assert(memcmp(okm, expected_okm, 32) == 0);
@@ -138,12 +165,22 @@ static void test_hkdf_error_cases(void) {
     assert(hkdf_sha256(NULL, 0, NULL, 32, info, 10, okm, 32) == -1);
 }
 
+=======
+    hkdf_sha256_extract(NULL, 0, ikm, 32, okm);
+    hkdf_sha256_expand(okm, 32, NULL, 0, okm, 32);
+    assert(memcmp(okm, expected_okm, 32) == 0);
+}
+
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 int main(void) {
     test_hkdf_rfc5869_vector1();
     test_hkdf_rfc5869_vector2();
     test_hkdf_rfc5869_vector3();
     test_hkdf_rfc5869_vector4();
+<<<<<<< HEAD
     test_hkdf_combined_api();
     test_hkdf_error_cases();
+=======
+>>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return 0;
 }
