@@ -1,7 +1,6 @@
 #include "protocol_types.h"
 #include "memory_scratchpad.h"
 #include "kem_adapter.h"
-<<<<<<< HEAD
 #include "mask_protocol.h"
 #include "shamir.h"
 #include "dropout_protocol.h"
@@ -9,18 +8,13 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 #include <stdint.h>
 #include <string.h>
 
 #define MAX_CLIENTS 16
 #define STATE_TIMEOUT_MS 5000
 #define LOCAL_TRAINING_DELAY_MS 100
-<<<<<<< HEAD
 #define DROPOUT_TIMEOUT_MS 10000
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 static protocol_state_buffer_t* get_proto_state(void) {
     return scratch_get_proto_state();
@@ -33,13 +27,10 @@ static void mock_local_training(client_protocol_ctx_t* ctx) {
     (void)ctx;
 }
 
-<<<<<<< HEAD
 static TimerHandle_t g_dropout_timer = NULL;
 static client_protocol_ctx_t* g_registered_contexts[MAX_CLIENTS] = {0};
 static uint8_t g_num_registered = 0;
 
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 pqc_status_t state_machine_init(client_protocol_ctx_t* ctx, uint8_t client_id, uint32_t round_id) {
     if (!ctx) return ERR_INVALID_ARGUMENT;
     memset(ctx, 0, sizeof(client_protocol_ctx_t));
@@ -47,10 +38,7 @@ pqc_status_t state_machine_init(client_protocol_ctx_t* ctx, uint8_t client_id, u
     ctx->current_round_id = round_id;
     ctx->state = STATE_ROUND_INIT;
     ctx->timeout_ms = STATE_TIMEOUT_MS;
-<<<<<<< HEAD
     ctx->last_activity_tick = xTaskGetTickCount();
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
 
@@ -58,10 +46,7 @@ pqc_status_t state_machine_transition(client_protocol_ctx_t* ctx, protocol_state
     if (!ctx) return ERR_INVALID_ARGUMENT;
     if (ctx->state == STATE_ERROR) return ERR_INVALID_STATE;
     ctx->state = new_state;
-<<<<<<< HEAD
     ctx->last_activity_tick = xTaskGetTickCount();
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
 
@@ -82,23 +67,21 @@ pqc_status_t state_machine_handle_round_init(client_protocol_ctx_t* ctx, const m
     ctx->chunk_ctx.total_chunks = (model_size + chunk_size - 1) / chunk_size;
     ctx->chunk_ctx.chunk_index = 0;
     ctx->chunk_ctx.bytes_processed = 0;
-<<<<<<< HEAD
     ctx->chunk_ctx.is_final_chunk = 0;
 
     ctx->shamir_ctx.threshold = threshold;
     ctx->shamir_ctx.num_shares = expected_clients - 1;
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
     return state_machine_transition(ctx, STATE_KEY_SETUP);
 }
 
 pqc_status_t state_machine_handle_key_setup(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload) {
     if (!ctx || ctx->state != STATE_KEY_SETUP) return ERR_INVALID_STATE;
-<<<<<<< HEAD
 
     if (hdr->message_type == MSG_TYPE_KEM_PUBLIC_KEY) {
-        return kem_adapter_keypair(&ctx->kem_kp);
+        pqc_status_t ret = kem_adapter_keypair(&ctx->kem_kp);
+        if (ret != PQC_SUCCESS) return ret;
+        return PQC_SUCCESS;
     }
 
     if (hdr->message_type == MSG_TYPE_KEM_CIPHERTEXT) {
@@ -113,48 +96,46 @@ pqc_status_t state_machine_handle_key_setup(client_protocol_ctx_t* ctx, const ms
         return state_machine_transition(ctx, STATE_MASK_SETUP);
     }
 
-=======
-    if (hdr->message_type == MSG_TYPE_KEM_PUBLIC_KEY) {
-        return kem_adapter_keypair(&ctx->kem_kp);
-    }
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return ERR_INVALID_ARGUMENT;
 }
 
 pqc_status_t state_machine_handle_mask_setup(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload) {
     if (!ctx || ctx->state != STATE_MASK_SETUP) return ERR_INVALID_STATE;
-<<<<<<< HEAD
+
+    size_t pk_bytes, sk_bytes, ct_bytes, ss_bytes;
+    pqc_status_t sz_ret = kem_adapter_get_sizes(&pk_bytes, &sk_bytes, &ct_bytes, &ss_bytes);
+    if (sz_ret != PQC_SUCCESS) return sz_ret;
 
     if (hdr->message_type == MSG_TYPE_PAIRWISE_KEM_PUBKEY) {
-        if (hdr->payload_length != ML_KEM_768_PUBLIC_KEY_BYTES) return ERR_INVALID_ARGUMENT;
+        if (hdr->payload_length != pk_bytes) return ERR_INVALID_ARGUMENT;
         uint8_t peer_id = hdr->client_id;
         for (uint8_t i = 0; i < ctx->pairwise_ctx.num_peers; i++) {
             if (ctx->pairwise_ctx.peers[i].peer_client_id == peer_id) {
-                memcpy(ctx->pairwise_ctx.peers[i].shared_secret, payload, ML_KEM_768_PUBLIC_KEY_BYTES);
+                memcpy(ctx->pairwise_ctx.peers[i].shared_secret, payload, pk_bytes);
                 return PQC_SUCCESS;
             }
         }
         if (ctx->pairwise_ctx.num_peers < MAX_PEERS_PER_CLIENT) {
             ctx->pairwise_ctx.peers[ctx->pairwise_ctx.num_peers].peer_client_id = peer_id;
-            memcpy(ctx->pairwise_ctx.peers[ctx->pairwise_ctx.num_peers].shared_secret, payload, ML_KEM_768_PUBLIC_KEY_BYTES);
+            memcpy(ctx->pairwise_ctx.peers[ctx->pairwise_ctx.num_peers].shared_secret, payload, pk_bytes);
             ctx->pairwise_ctx.num_peers++;
         }
         return PQC_SUCCESS;
     }
 
     if (hdr->message_type == MSG_TYPE_PAIRWISE_KEM_CIPHERTEXT) {
-        if (hdr->payload_length != ML_KEM_768_CIPHERTEXT_BYTES) return ERR_INVALID_ARGUMENT;
+        if (hdr->payload_length != ct_bytes) return ERR_INVALID_ARGUMENT;
         uint8_t peer_id = hdr->client_id;
-        uint8_t shared_secret[ML_KEM_768_SHARED_SECRET_BYTES];
+        uint8_t shared_secret[32];
         for (uint8_t i = 0; i < ctx->pairwise_ctx.num_peers; i++) {
             if (ctx->pairwise_ctx.peers[i].peer_client_id == peer_id) {
                 pqc_status_t ret = kem_adapter_decapsulate(
                     payload, hdr->payload_length,
-                    ctx->pairwise_ctx.peers[i].shared_secret, ML_KEM_768_PUBLIC_KEY_BYTES,
+                    ctx->pairwise_ctx.peers[i].shared_secret, pk_bytes,
                     shared_secret
                 );
                 if (ret != PQC_SUCCESS) return ret;
-                memcpy(ctx->pairwise_ctx.peers[i].shared_secret, shared_secret, ML_KEM_768_SHARED_SECRET_BYTES);
+                memcpy(ctx->pairwise_ctx.peers[i].shared_secret, shared_secret, ss_bytes);
                 return PQC_SUCCESS;
             }
         }
@@ -162,11 +143,11 @@ pqc_status_t state_machine_handle_mask_setup(client_protocol_ctx_t* ctx, const m
     }
 
     if (hdr->message_type == MSG_TYPE_PAIRWISE_CONFIRM) {
-        uint8_t client_client_kem_secrets[MAX_PEERS_PER_CLIENT * ML_KEM_768_SHARED_SECRET_BYTES];
+        uint8_t client_client_kem_secrets[MAX_PEERS_PER_CLIENT * 32];
         for (uint8_t i = 0; i < ctx->pairwise_ctx.num_peers; i++) {
-            memcpy(&client_client_kem_secrets[i * ML_KEM_768_SHARED_SECRET_BYTES],
+            memcpy(&client_client_kem_secrets[i * 32],
                    ctx->pairwise_ctx.peers[i].shared_secret,
-                   ML_KEM_768_SHARED_SECRET_BYTES);
+                   ss_bytes);
         }
         pqc_status_t ret = mask_protocol_derive_pairwise_seeds(
             &ctx->pairwise_ctx, ctx->client_id,
@@ -177,9 +158,6 @@ pqc_status_t state_machine_handle_mask_setup(client_protocol_ctx_t* ctx, const m
     }
 
     return ERR_INVALID_ARGUMENT;
-=======
-    return state_machine_transition(ctx, STATE_LOCAL_TRAINING);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }
 
 pqc_status_t state_machine_handle_local_training(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload) {
@@ -194,7 +172,6 @@ pqc_status_t state_machine_handle_stream_chunk(client_protocol_ctx_t* ctx, const
     if (payload_len != ctx->chunk_ctx.chunk_size && !(ctx->chunk_ctx.is_final_chunk && payload_len < ctx->chunk_ctx.chunk_size)) {
         return ERR_CHUNK_TOO_LARGE;
     }
-<<<<<<< HEAD
 
     uint16_t chunk_elements = ctx->chunk_ctx.chunk_size / 2;
     int16_t mask[CHUNK_BUFFER_BYTES / 2];
@@ -219,15 +196,12 @@ pqc_status_t state_machine_handle_stream_chunk(client_protocol_ctx_t* ctx, const
         ctx->chunk_ctx.is_final_chunk = 1;
     }
 
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
 
 pqc_status_t state_machine_handle_completion(client_protocol_ctx_t* ctx, const msg_header_t* hdr) {
     if (!ctx || ctx->state != STATE_MASKED_UPDATE_STREAM) return ERR_INVALID_STATE;
     if (hdr->message_type != MSG_TYPE_CLIENT_COMPLETE) return ERR_INVALID_ARGUMENT;
-<<<<<<< HEAD
 
     uint8_t shamir_secret[SHAMIR_SHARE_VALUE_BYTES];
     pqc_status_t ret = kem_adapter_derive_shamir_secret(
@@ -270,8 +244,6 @@ pqc_status_t state_machine_handle_completion(client_protocol_ctx_t* ctx, const m
         (void)send_ret;
     }
 
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return state_machine_transition(ctx, STATE_CLIENT_COMPLETION);
 }
 
@@ -293,7 +265,6 @@ pqc_status_t state_machine_handle_round_complete(client_protocol_ctx_t* ctx, con
     return state_machine_transition(ctx, STATE_ROUND_COMPLETE);
 }
 
-<<<<<<< HEAD
 static void dropout_timer_callback(TimerHandle_t xTimer) {
     (void)xTimer;
     for (uint8_t i = 0; i < g_num_registered; i++) {
@@ -343,18 +314,13 @@ void protocol_check_timeouts(void) {
     }
 }
 
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 pqc_status_t state_machine_process_message(client_protocol_ctx_t* ctx, const msg_header_t* hdr, const uint8_t* payload, uint16_t payload_len) {
     if (!ctx || !hdr) return ERR_INVALID_ARGUMENT;
     if (hdr->round_id != ctx->current_round_id) return ERR_ROUND_MISMATCH;
     if (hdr->client_id != 0 && hdr->client_id != ctx->client_id) return ERR_CLIENT_ID_MISMATCH;
 
-<<<<<<< HEAD
     ctx->last_activity_tick = xTaskGetTickCount();
 
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     switch (ctx->state) {
         case STATE_ROUND_INIT:
             return state_machine_handle_round_init(ctx, hdr, payload);
@@ -383,8 +349,4 @@ pqc_status_t state_machine_process_message(client_protocol_ctx_t* ctx, const msg
             break;
     }
     return ERR_INVALID_STATE;
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4

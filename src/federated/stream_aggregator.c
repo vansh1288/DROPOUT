@@ -3,6 +3,7 @@
 #include "protocol_types.h"
 #include "mask_prg.h"
 #include "kem_adapter.h"
+#include "dma_stream_bridge.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
@@ -18,6 +19,8 @@ static StaticTask_t stream_tcb;
 static uint8_t stream_queue_storage[STREAM_QUEUE_LENGTH * STREAM_QUEUE_ITEM_SIZE];
 static StaticQueue_t stream_queue_struct;
 
+static dma_stream_bridge_t g_dma_bridge;
+
 static inline uint16_t barrett_reduce_q(uint32_t a) {
     uint32_t t = (a * 20159) >> 26;
     uint16_t r = (uint16_t)(a - t * 3329);
@@ -29,9 +32,9 @@ static inline uint16_t mod_q(int32_t val) {
     return (uint16_t)r;
 }
 
-
 void stream_aggregator_init(void) {
     g_stream_queue = xQueueCreateStatic(STREAM_QUEUE_LENGTH, STREAM_QUEUE_ITEM_SIZE, stream_queue_storage, &stream_queue_struct);
+    dma_stream_bridge_init(&g_dma_bridge, 1000);
     xTaskCreateStatic(stream_aggregator_task, "stream_aggregator", 1024, NULL, 2, stream_stack, &stream_tcb);
 }
 
@@ -46,8 +49,25 @@ BaseType_t stream_aggregator_submit(const stream_work_item_t* item, TickType_t t
 
 static void stream_aggregator_task(void* pvParameters) {
     stream_work_item_t item;
+    uint8_t* dma_data = NULL;
+    uint16_t dma_length = 0;
+    uint16_t chunk_index = 0;
+
     while (1) {
-        if (xQueueReceive(g_stream_queue, &item, portMAX_DELAY) == pdTRUE) {
+        // Check for DMA data first
+        if (dma_stream_bridge_get_chunk(&g_dma_bridge, &dma_data, &dma_length, &chunk_index, 10) == PQC_SUCCESS) {
+            // Process DMA data directly
+            pqc_status_t ret = stream_aggregator_process_dma_data(0, 0, 0, 0, NULL);
+            if (ret != PQC_SUCCESS) {
+                // Handle error
+            }
+            dma_stream_bridge_release_buffer(&g_dma_bridge, 0);
+            continue;
+        }
+
+        // Process queued work items
+        stream_work_item_t item;
+        if (xQueueReceive(g_stream_queue, &item, pdMS_TO_TICKS(10)) == pdTRUE) {
             if (item.op == 1) {
                 telemetry_cycle_start();
                 stream_aggregator_process_chunk(item.client_id, item.round_id, item.chunk_index, item.chunk_size, item.shared_secret);
@@ -67,6 +87,11 @@ static void stream_aggregator_task(void* pvParameters) {
     }
 }
 
+pqc_status_t stream_aggregator_process_dma_data(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
+    // Placeholder - actual implementation would process DMA data
+    return PQC_SUCCESS;
+}
+
 pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint16_t chunk_size, const uint8_t* shared_secret) {
     if (chunk_size > CHUNK_BUFFER_BYTES) return ERR_CHUNK_TOO_LARGE;
     if (chunk_size % 2 != 0) return ERR_CHUNK_TOO_SMALL;
@@ -80,16 +105,10 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
     );
     if (ret != PQC_SUCCESS) return ret;
 
-<<<<<<< HEAD
     mask_prg_ctx_t prg_ctx;
     mask_prg_init(&prg_ctx, stream_seed);
     int16_t mask[CHUNK_BUFFER_BYTES / 2];
     mask_prg_get_bytes(&prg_ctx, (uint8_t*)mask, chunk_size);
-=======
-    mask_prg_init(stream_seed);
-    int16_t mask[CHUNK_BUFFER_BYTES / 2];
-    mask_prg_expand((uint8_t*)mask, chunk_size);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
     int16_t* input = (int16_t*)chunk_buf->data;
     int16_t* output = (int16_t*)dma_tx->ping;
@@ -102,10 +121,7 @@ pqc_status_t stream_aggregator_process_chunk(uint8_t client_id, uint32_t round_i
 
     crypto_zeroize(mask, sizeof(mask));
     crypto_zeroize(stream_seed, 32);
-<<<<<<< HEAD
     crypto_zeroize(&prg_ctx, sizeof(mask_prg_ctx_t));
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
 
@@ -122,16 +138,10 @@ pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id
     );
     if (ret != PQC_SUCCESS) return ret;
 
-<<<<<<< HEAD
     mask_prg_ctx_t prg_ctx;
     mask_prg_init(&prg_ctx, stream_seed);
     int16_t mask[CHUNK_BUFFER_BYTES / 2];
     mask_prg_get_bytes(&prg_ctx, (uint8_t*)mask, chunk_size);
-=======
-    mask_prg_init(stream_seed);
-    int16_t mask[CHUNK_BUFFER_BYTES / 2];
-    mask_prg_expand((uint8_t*)mask, chunk_size);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
     int16_t* input = (int16_t*)chunk_buf->data;
     int16_t* output = (int16_t*)dma_tx->ping;
@@ -144,9 +154,6 @@ pqc_status_t stream_aggregator_unmask_chunk(uint8_t client_id, uint32_t round_id
 
     crypto_zeroize(mask, sizeof(mask));
     crypto_zeroize(stream_seed, 32);
-<<<<<<< HEAD
     crypto_zeroize(&prg_ctx, sizeof(mask_prg_ctx_t));
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return PQC_SUCCESS;
 }
