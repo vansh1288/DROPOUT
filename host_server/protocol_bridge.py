@@ -2,7 +2,7 @@ import asyncio
 import struct
 import hashlib
 import hmac
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 
 try:

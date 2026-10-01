@@ -49,11 +49,44 @@ All protocol keys are derived from ML-KEM shared secrets using HKDF-SHA256 with 
 | Stream Mask Seed | `SwiftAgg-StreamMask-v1` |
 | Shamir Secret | `SwiftAgg-ShamirSecret-v1` |
 
-### 1.5 Security Notes
+### 1.5 ML-KEM Decapsulation and Implicit Rejection (FIPS 203)
 
-- ML-KEM decapsulation returns success (0) even for invalid ciphertexts, producing a pseudorandom shared secret (FIPS 203 implicit rejection)
-- Ephemeral keys per round provide forward secrecy
-- All private keys zeroized after use via `crypto_zeroize()`
+**Critical Security Property**: ML-KEM decapsulation uses *implicit rejection* as specified in FIPS 203.
+
+**Behavior**:
+- `kem_adapter_decapsulate()` **always returns `PQC_SUCCESS`** (returns 0 from underlying implementation)
+- On **valid ciphertext**: returns the correct shared secret in `shared_secret`
+- On **invalid/corrupted ciphertext**: returns a **pseudorandom shared secret** in `shared_secret`
+- **Never returns an error code** for invalid ciphertexts (implicit rejection per FIPS 203)
+- The underlying PQClean implementation **always returns 0** (success) from `crypto_kem_dec()`
+
+**Security Implications**:
+- The caller **MUST NOT** assume the ciphertext was valid just because `kem_adapter_decapsulate()` returns `PQC_SUCCESS`
+- The caller **MUST** use `kem_adapter_verify_decapsulation()` to verify the decapsulated shared secret matches the expected value
+- A pseudorandom shared secret on decapsulation failure provides IND-CCA2 security without leaking validity information
+
+**Correct Usage Pattern**:
+```c
+// Encapsulation (sender)
+kem_encapsulation_t enc;
+pqc_status_t ret = kem_adapter_encapsulate(pubkey, pk_len, &enc);
+// enc.ciphertext and enc.shared_secret are now populated
+
+// Decapsulation (receiver)
+uint8_t shared_secret[32];
+pqc_status_t ret = kem_adapter_decapsulate(ciphertext, ct_len, secret_key, sk_len, shared_secret);
+// CRITICAL: ret is ALWAYS PQC_SUCCESS (implicit rejection)
+
+// Verify decapsulation succeeded
+if (kem_adapter_verify_decapsulation(expected_ss, shared_secret) != PQC_SUCCESS) {
+    // Decapsulation failed - ciphertext was invalid/corrupted
+    // shared_secret contains pseudorandom data
+    handle_decapsulation_failure();
+}
+// Safe to use shared_secret
+```
+
+**Security Rationale**: Implicit rejection prevents side-channel attacks that could distinguish between valid and invalid ciphertexts, which would break IND-CCA2 security.
 
 ---
 

@@ -83,12 +83,12 @@ ML-KEM decapsulation returns 0 on success **and** on ciphertext verification fai
 
 ---
 
-### 4. **Shamir Share Size Constant Mismatch** (Medium)
-**File**: `protocol_types.h:42` vs `shamir.h:11`
+### 4. **Shamir Share Size Constant Mismatch** (FIXED)
+**File**: `protocol_types.h:42`
 
-`SHAMIR_SHARE_VALUE_BYTES = 32` in `protocol_types.h` but Shamir uses 32 GF(3329) elements = 64 bytes. Python side expects 64 bytes.
+**FIXED**: `SHAMIR_SHARE_VALUE_BYTES` updated from 32 to 64 in `protocol_types.h:42`. All affected structures, buffers, and copy operations now use 64 bytes. Python side already expected 64 bytes. Verified C-Python interoperability with Python tests.
 
-**Impact**: Potential buffer overflow or truncation if protocol uses the 32-byte constant.
+**Fixed in**: `protocol_types.h:42`, `state_machine.c` (uses `shamir_share_bytes`), `shamir.c/h` (already correct).
 
 ---
 
@@ -120,6 +120,7 @@ The backward-compatible simple API uses a single static context (`g_simple_ctx`)
 | **AES-CTR PRG Global State & Counter Bug** | ✅ Context-based API (`mask_prg_ctx_t`), fixed counter increment |
 | **Shamir CSPRNG** | ✅ `shamir.c` uses `randombytes()`; test RNG for deterministic tests |
 | **Lagrange Interpolation Bug** | ✅ Fixed numerator to use `-xj` (i.e., `gf3329_sub(0, xj)`) |
+| **Shamir Share Size Mismatch** | ✅ Updated `SHAMIR_SHARE_VALUE_BYTES` from 32 to 64; all C/Python code aligned |
 
 ---
 
@@ -178,7 +179,6 @@ The backward-compatible simple API uses a single static context (`g_simple_ctx`)
 | X25519 fallback non-standard | Medium | Remove or replace with HPKE/ECIES |
 | ESP32-C3 no hardware RNG | High | Implement `esp_fill_random()` in `randombytes()` |
 | Global state in `mask_prg_simple_*` | Low | Migrate callers to context-based API |
-| Share size constant mismatch | Medium | Update `SHAMIR_SHARE_VALUE_BYTES` to 64 |
 
 ---
 

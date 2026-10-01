@@ -184,6 +184,118 @@ def test_shamir_field_properties():
             assert recon2 == secret, f"Subset 2 failed for secret={secret}, n={n}, t={t}: {recon2} != {secret}"
             assert recon3 == secret, f"Subset 3 failed for secret={secret}, n={n}, t={t}: {recon3} != {secret}"
 
+def test_shamir_lagrange_interpolation():
+    """Test Lagrange interpolation at x=0 with correct numerator (-xj)"""
+    # This test would FAIL if the numerator used xj instead of -xj
+    for secret in [123, 1000, 3328]:  # All within field range [0, 3328]
+        for n, t in [(5, 3), (7, 4)]:
+            coeffs = [secret] + [secrets.randbelow(FIELD_MODULUS) for _ in range(t-1)]
+            shares = [(i+1, evaluate_polynomial(coeffs, i+1)) for i in range(n)]
+            
+            # Test with non-consecutive share indices
+            subset = shares[::2][:t]  # Even indices: x = 1, 3, 5, ...
+            recon = reconstruct_secret(subset)
+            assert recon == secret, f"Non-consecutive subset failed: secret={secret}, recon={recon}"
+            
+            # Test with specific subset
+            subset2 = shares[1:t+1]  # x = 2, 3, 4, ...
+            recon2 = reconstruct_secret(subset2)
+            assert recon2 == secret, f"Consecutive subset failed: secret={secret}, recon={recon2}"
+
+def test_shamir_error_handling():
+    """Test error handling for invalid inputs"""
+    # Duplicate index detection
+    try:
+        shares = [(1, 100), (1, 200), (2, 300)]
+        reconstruct_secret(shares)
+        assert False, "Should have raised ValueError for duplicate indices"
+    except ValueError as e:
+        assert "Duplicate" in str(e)
+    
+    # Zero index detection
+    try:
+        shares = [(0, 100), (1, 200), (2, 300)]
+        reconstruct_secret(shares)
+        assert False, "Should have raised ValueError for zero index"
+    except ValueError as e:
+        assert "zero" in str(e).lower()
+    
+    # Insufficient shares (less than 2)
+    try:
+        shares = [(1, 100)]
+        reconstruct_secret(shares)
+        assert False, "Should have raised ValueError for insufficient shares"
+    except ValueError as e:
+        assert "at least 2" in str(e).lower()
+
+def test_shamir_boundary_values():
+    """Test Shamir with boundary field values"""
+    for secret in [0, 1, 3328]:  # 3328 = FIELD_MODULUS - 1
+        for n, t in [(5, 3), (7, 4)]:
+            coeffs = [secret] + [secrets.randbelow(FIELD_MODULUS) for _ in range(t-1)]
+            shares = [(i+1, evaluate_polynomial(coeffs, i+1)) for i in range(n)]
+            recon = reconstruct_secret(shares[:t])
+            assert recon == secret, f"Boundary failed: secret={secret}, recon={recon}"
+
+def test_shamir_lagrange_basis_sum():
+    """Test that Lagrange basis polynomials sum to 1 at x=0"""
+    for secret in [0, 1, 100, 1000, 3328]:
+        for n, t in [(5, 3), (7, 4), (10, 5)]:
+            coeffs = [secret] + [secrets.randbelow(FIELD_MODULUS) for _ in range(t-1)]
+            shares = [(i+1, evaluate_polynomial(coeffs, i+1)) for i in range(n)]
+            
+            # Compute sum of Lagrange basis polynomials at x=0
+            share_x = [x for x, y in shares[:t]]
+            sum_lagrange = 0
+            for i in range(t):
+                xi = share_x[i]
+                num = 1
+                den = 1
+                for j in range(t):
+                    if i == j: continue
+                    xj = share_x[j]
+                    num = (num * (-xj)) % FIELD_MODULUS
+                    diff = xi - xj
+                    if diff < 0: diff += FIELD_MODULUS
+                    den = (den * diff) % FIELD_MODULUS
+                lagrange = (num * pow(den, FIELD_MODULUS-2, FIELD_MODULUS)) % FIELD_MODULUS
+                sum_lagrange = (sum_lagrange + lagrange) % FIELD_MODULUS
+            
+            assert sum_lagrange == 1, f"Lagrange sum failed: {sum_lagrange} != 1"
+
+def test_shamir_regression_incorrect_numerator():
+    """Regression test: verify that using xj instead of -xj in numerator fails"""
+    # For even thresholds (t=4), the incorrect numerator (xj instead of -xj) 
+    # gives a different result because (-1)^(t-1) = -1 for even t
+    secret = 1234
+    coeffs = [secret, 123, 456, 789]  # t=4 (even)
+    share_x = [1, 3, 5, 7]
+    share_y = [evaluate_polynomial(coeffs, x) for x in share_x]
+    
+    # Correct reconstruction
+    correct_recon = reconstruct_secret(list(zip(share_x, share_y)))
+    assert correct_recon == secret
+    
+    # Incorrect numerator (using xj instead of -xj)
+    incorrect_recon = 0
+    p = FIELD_MODULUS
+    for i, xi in enumerate(share_x):
+        yi = evaluate_polynomial(coeffs, xi)
+        numerator = 1
+        denominator = 1
+        for j, xj in enumerate(share_x):
+            if i == j: continue
+            # INCORRECT: using xj instead of -xj
+            numerator = (numerator * xj) % p
+            denominator = (denominator * (xi - xj)) % p
+        lagrange = (numerator * pow(denominator, p-2, p)) % p
+        incorrect_recon = (incorrect_recon + evaluate_polynomial(coeffs, xi) * lagrange) % p
+    
+    # For t=4 (even), incorrect numerator should give wrong result
+    assert incorrect_recon != secret, "Incorrect numerator should produce wrong result for even threshold"
+    # Verify correct implementation still works
+    assert correct_recon == secret
+
 if __name__ == "__main__":
     test_hkdf_rfc5869()
     test_aes_ctr_nist()
@@ -194,4 +306,9 @@ if __name__ == "__main__":
     test_shamir_reconstruct()
     test_shamir_bytes()
     test_shamir_field_properties()
+    test_shamir_lagrange_interpolation()
+    test_shamir_error_handling()
+    test_shamir_boundary_values()
+    test_shamir_lagrange_basis_sum()
+    test_shamir_regression_incorrect_numerator()
     print("All unit tests passed.")

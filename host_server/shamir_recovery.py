@@ -35,6 +35,13 @@ def reconstruct_secret(shares: List[Tuple[int, int]]) -> int:
     if len(shares) < 2:
         raise ValueError("Need at least 2 shares to reconstruct")
     
+    # Validate share indices: must be non-zero and unique
+    share_indices = [x for x, _ in shares]
+    if any(x == 0 for x in share_indices):
+        raise ValueError("Share index cannot be zero")
+    if len(set(share_indices)) != len(share_indices):
+        raise ValueError("Duplicate share indices")
+    
     secret = 0
     p = FIELD_MODULUS
     

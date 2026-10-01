@@ -70,3 +70,11 @@ void mask_prg_simple_expand(uint8_t* out, size_t len) {
         }
     }
 }
+
+void mask_prg_cleanup(mask_prg_ctx_t* ctx) {
+    if (!ctx) return;
+    crypto_zeroize(&ctx->sched, sizeof(ctx->sched));
+    crypto_zeroize(ctx->nonce, sizeof(ctx->nonce));
+    crypto_zeroize(ctx->ctr, sizeof(ctx->ctr));
+    ctx->initialized = 0;
+}

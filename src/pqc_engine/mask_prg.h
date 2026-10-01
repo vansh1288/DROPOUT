@@ -20,6 +20,9 @@ void mask_prg_get_bytes(mask_prg_ctx_t* ctx, uint8_t* out, size_t len);
 void mask_prg_simple_init(const uint8_t seed[32]);
 void mask_prg_simple_expand(uint8_t* out, size_t len);
 
+/* Cleanup function to zeroize sensitive context material */
+void mask_prg_cleanup(mask_prg_ctx_t* ctx);
+
 #ifdef __cplusplus
 extern "C" {
 #endif

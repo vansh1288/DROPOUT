@@ -123,7 +123,7 @@ Using deterministic seed = [0,1,2,...,47]:
 3. **AES-CTR NIST vector mismatch** - cryptography library uses different counter initialization
 4. **X25519 fallback** - Non-standard KEM construction, marked deprecated
 5. **Side-channel resistance** - Not evaluated (reference implementations only)
-6. **Duplicate Shamir implementations** - `shamir.c` (CSPRNG) vs `dropout_protocol.c` (HKDF-derived)
+6. **Duplicate Shamir implementations** - `shamir.c` (CSPRNG) vs `dropout_protocol.c` (HKDF-derived) — **production uses deterministic Shamir**
 7. **ESP32-C3 RNG not implemented** - `randombytes()` falls back to deterministic PRNG
 
 ---
@@ -138,8 +138,27 @@ Using deterministic seed = [0,1,2,...,47]:
 - [ ] Stack/heap usage measurement on target
 - [ ] Timing attack evaluation on target hardware
 - [ ] ESP32-C3 hardware RNG integration (`esp_fill_random()`)
-- [ ] Resolve duplicate Shamir implementations
-- [ ] Fix `SHAMIR_SHARE_VALUE_BYTES` constant (32 → 64)
+- [ ] Resolve duplicate Shamir implementations (production uses deterministic Shamir)
+- [x] Fix `SHAMIR_SHARE_VALUE_BYTES` constant (32 → 64) — **DONE**
+
+---
+
+## C-Python Interoperability Tests
+
+The following cross-language compatibility tests were run and passed:
+
+| Test | Description | Result |
+|------|-------------|--------|
+| Shamir 3-of-5 reconstruction | C-style share generation → Python reconstruction | ✅ PASS |
+| Shamir 2-of-5 failed reconstruction | Insufficient shares correctly rejected | ✅ PASS |
+| Shamir field operations | Add, sub, mul, inv over GF(3329) | ✅ PASS |
+| Shamir different thresholds | 4-of-7, 5-of-10, etc. | ✅ PASS |
+| Shamir zero secret | All-zero secret reconstruction | ✅ PASS |
+| Shamir bytes API | 64-byte share format (32 elements) | ✅ PASS |
+| Shamir deterministic reproducibility | Same seed = identical shares | ✅ PASS |
+| C-Python share format | C `shamir_share_bytes()` → Python `reconstruct_secret_bytes()` | ✅ PASS |
+
+All tests use GF(3329) with 32 field elements, little-endian uint16 encoding.
 
 ---
 

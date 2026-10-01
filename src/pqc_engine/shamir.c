@@ -82,6 +82,10 @@ static int generate_random_coefficients(uint16_t* coeffs, size_t count) {
     for (size_t i = 0; i < count; i++) {
         int ret = RNG_FUNC(buffer, 2);
         if (ret != 0) {
+            // Clear any coefficients already generated
+            for (size_t j = 0; j < i; j++) {
+                coeffs[j] = 0;
+            }
             return ret;
         }
         uint16_t val = (uint16_t)(buffer[0] | (buffer[1] << 8));
@@ -103,6 +107,16 @@ int shamir_share(const uint16_t* secret, uint8_t secret_elements, uint16_t* shar
         if (t > 1) {
             int ret = generate_random_coefficients(&coeffs[elem * t + 1], t - 1);
             if (ret != 0) {
+                // Clear any coefficients already generated for this element
+                for (size_t j = 0; j < t; j++) {
+                    coeffs[elem * t + j] = 0;
+                }
+                // Clear any previous elements' coefficients
+                for (uint8_t prev_elem = 0; prev_elem < elem; prev_elem++) {
+                    for (size_t j = 0; j < t; j++) {
+                        coeffs[prev_elem * t + j] = 0;
+                    }
+                }
                 return ret;
             }
         }
@@ -115,12 +129,25 @@ int shamir_share(const uint16_t* secret, uint8_t secret_elements, uint16_t* shar
         }
     }
 
+    // Clear workspace coefficients
+    for (size_t i = 0; i < (size_t)t * secret_elements; i++) {
+        coeffs[i] = 0;
+    }
+
     return 0;
 }
 
 int shamir_reconstruct(uint16_t* secret, const uint16_t* share_x, uint16_t** share_y, uint8_t k, uint16_t* workspace) {
     if (!secret || !share_x || !share_y || !workspace) return -1;
     if (k < 2 || k > SHAMIR_MAX_SHARES) return -1;
+
+    // Validate share indices: must be non-zero and unique
+    for (uint8_t i = 0; i < k; i++) {
+        if (share_x[i] == 0) return -1;
+        for (uint8_t j = i + 1; j < k; j++) {
+            if (share_x[i] == share_x[j]) return -1;
+        }
+    }
 
     for (uint8_t elem = 0; elem < 32; elem++) {
         for (uint8_t i = 0; i < k; i++) {

@@ -33,9 +33,11 @@ pqc_status_t dropout_protocol_derive_mask_for_recovery(const uint8_t* shamir_sec
     uint8_t stream_seed[32];
     ret = kem_adapter_derive_stream_mask_seed(pairwise_seed, client_id, round_id, chunk_index, stream_seed);
     if (ret != PQC_SUCCESS) return ret;
-    mask_prg_simple_init(stream_seed);
-    mask_prg_simple_expand((uint8_t*)mask, chunk_size * sizeof(int16_t));
+    mask_prg_ctx_t prg_ctx;
+    mask_prg_init(&prg_ctx, stream_seed);
+    mask_prg_get_bytes(&prg_ctx, (uint8_t*)mask, chunk_size * sizeof(int16_t));
     crypto_zeroize(stream_seed, 32);
     crypto_zeroize(pairwise_seed, 32);
+    crypto_zeroize(&prg_ctx, sizeof(mask_prg_ctx_t));
     return PQC_SUCCESS;
 }
