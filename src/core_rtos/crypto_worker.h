@@ -31,6 +31,7 @@ typedef struct {
     size_t info_len;
     uint8_t* session_key_out;
     BaseType_t* done_flag;
+    pqc_status_t* status_out;
 } crypto_work_item_t;
 
 void crypto_worker_init(void);

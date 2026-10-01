@@ -39,11 +39,7 @@
 #define SHAMIR_MAX_SHARES         255u
 #define SHAMIR_MAX_THRESHOLD      255u
 #define SHAMIR_SHARE_ID_BYTES     1u
-<<<<<<< HEAD
 #define SHAMIR_SHARE_VALUE_BYTES  64u
-=======
-#define SHAMIR_SHARE_VALUE_BYTES  32u
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 #define MAX_MODEL_NAME_LEN        32u
 #define MAX_FIRMWARE_VERSION_LEN  16u

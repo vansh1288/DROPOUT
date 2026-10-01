@@ -31,11 +31,12 @@ static void crypto_worker_task(void* pvParameters) {
     crypto_work_item_t item;
     while (1) {
         if (xQueueReceive(g_crypto_queue, &item, portMAX_DELAY) == pdTRUE) {
+            pqc_status_t status = PQC_SUCCESS;
             switch (item.op) {
                 case CRYPTO_OP_KEYPAIR:
                     if (item.keypair_out) {
                         telemetry_cycle_start();
-                        kem_adapter_keypair(item.keypair_out);
+                        status = kem_adapter_keypair(item.keypair_out);
                         uint32_t cycles = telemetry_cycle_end();
                         if (g_telemetry_session.round_count > 0) {
                             telemetry_record_crypto(cycles, 0, 0, 0, 0, 0);
@@ -46,7 +47,7 @@ static void crypto_worker_task(void* pvParameters) {
                 case CRYPTO_OP_ENCAPSULATE:
                     if (item.public_key && item.encap_out) {
                         telemetry_cycle_start();
-                        kem_adapter_encapsulate(item.public_key, item.pk_len, item.encap_out);
+                        status = kem_adapter_encapsulate(item.public_key, item.pk_len, item.encap_out);
                         uint32_t cycles = telemetry_cycle_end();
                         if (g_telemetry_session.round_count > 0) {
                             telemetry_record_crypto(0, cycles, 0, 0, 0, 0);
@@ -57,7 +58,7 @@ static void crypto_worker_task(void* pvParameters) {
                 case CRYPTO_OP_DECAPSULATE:
                     if (item.ciphertext && item.secret_key && item.shared_secret_out) {
                         telemetry_cycle_start();
-                        kem_adapter_decapsulate(item.ciphertext, item.ct_len, item.secret_key, item.sk_len, item.shared_secret_out);
+                        status = kem_adapter_decapsulate(item.ciphertext, item.ct_len, item.secret_key, item.sk_len, item.shared_secret_out);
                         uint32_t cycles = telemetry_cycle_end();
                         if (g_telemetry_session.round_count > 0) {
                             telemetry_record_crypto(0, 0, cycles, 0, 0, 0);
@@ -68,7 +69,7 @@ static void crypto_worker_task(void* pvParameters) {
                 case CRYPTO_OP_HKDF:
                     if (item.shared_secret_in && item.session_key_out) {
                         telemetry_cycle_start();
-                        kem_adapter_derive_session_key(item.shared_secret_in, item.salt, item.salt_len, item.info, item.info_len, item.session_key_out);
+                        status = kem_adapter_derive_session_key(item.shared_secret_in, item.salt, item.salt_len, item.info, item.info_len, item.session_key_out);
                         uint32_t cycles = telemetry_cycle_end();
                         if (g_telemetry_session.round_count > 0) {
                             telemetry_record_crypto(0, 0, 0, cycles, 0, 0);
@@ -79,6 +80,7 @@ static void crypto_worker_task(void* pvParameters) {
                 default:
                     break;
             }
+            if (item.status_out) *item.status_out = status;
         }
     }
 }

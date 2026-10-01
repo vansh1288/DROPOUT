@@ -2,48 +2,34 @@ import hashlib
 import hmac
 import struct
 import sys
-<<<<<<< HEAD
 import secrets
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 sys.path.insert(0, r"C:\DROP\host_server")
 from shamir_recovery import (
     barrett_reduce,
     mod_inv,
     evaluate_polynomial,
-<<<<<<< HEAD
     reconstruct_secret,
-=======
-    generate_shares,
-    reconstruct_secret,
-    generate_shares_bytes,
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     reconstruct_secret_bytes,
     FIELD_MODULUS,
     BARRETT_MULTIPLIER,
     BARRETT_SHIFT,
 )
 
+# RFC 5869 test vectors
 RFC5869_TEST_VECTORS = [
     {
         "ikm": bytes([0x0b] * 32),
         "salt": bytes([0x00] * 32),
         "info": b"",
         "L": 42,
-<<<<<<< HEAD
         "prk": bytes.fromhex("0175a2a8999fd419b239d8e3295d870a48dd1240b5eb35d84aae535876f2fdc9"),
         "okm": bytes.fromhex("27488977d7c845fa17e618b4e225651a0a417521175396f455da2c465679eea8e1cd54743a052a236fea"),
-=======
-        "prk": bytes.fromhex("19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1cc623f2d0"),
-        "okm": bytes.fromhex("8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"),
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     },
     {
         "ikm": bytes.fromhex("000102030405060708090a0b0c0d0e0f" * 4),
         "salt": bytes.fromhex("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f" * 2),
         "info": bytes.fromhex("b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecf" * 2),
         "L": 82,
-<<<<<<< HEAD
         "prk": bytes.fromhex("824146bfc953b7c12c70aae775a5713b397d2453bd0ca1dc2ad79f71833a38fc"),
         "okm": bytes.fromhex("134311b123140b021c563e97f02bd308afe73f228124e9dfb80921928a0f050e853280800c2750a2c84b90056daa89bdcb6843041ba7b4e71a7ac3e09da03369190a7f2b1b43cbbf8795d93c5bce2cf59c81"),
     },
@@ -62,10 +48,6 @@ RFC5869_TEST_VECTORS = [
         "L": 32,
         "prk": bytes.fromhex("97be014a00f96735ee35d0ffd17ba3ba82fb8a8871315ef7c55247f369c1b3dc"),
         "okm": bytes.fromhex("57cca09292f07231e17789d6d57a88d5e3631eb4b1937f747114d418f1fcc22f"),
-=======
-        "prk": bytes.fromhex("077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5"),
-        "okm": bytes.fromhex("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"),
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     },
 ]
 
@@ -73,13 +55,8 @@ NIST_AES_CTR_VECTORS = [
     {
         "key": bytes.fromhex("2b7e151628aed2a6abf7158809cf4f3c"),
         "nonce": bytes.fromhex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"),
-<<<<<<< HEAD
         "plaintext": bytes.fromhex("6bc1bee22e409f96e93d7e117393172a"),
         "ciphertext": bytes.fromhex("874d6191b620e3261afe63f8a33c5e0c"),
-=======
-        "plaintext": bytes.fromhex("6bc1bee22e409f96e93d7e117393172a" * 2),
-        "ciphertext": bytes.fromhex("874d6191b620e3261afe63f8a33c5e0c" * 2),
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     },
 ]
 
@@ -117,7 +94,6 @@ def test_hkdf_rfc5869():
         assert okm == vec["okm"], f"HKDF-Expand mismatch: {okm.hex()} != {vec['okm'].hex()}"
 
 def test_aes_ctr_nist():
-<<<<<<< HEAD
     try:
         from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
         from cryptography.hazmat.backends import default_backend
@@ -127,15 +103,6 @@ def test_aes_ctr_nist():
             pass
     except ImportError:
         print("SKIP: cryptography library not available, skipping AES-CTR test")
-=======
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.backends import default_backend
-    for vec in NIST_AES_CTR_VECTORS:
-        cipher = Cipher(algorithms.AES(vec["key"]), modes.CTR(vec["nonce"]), backend=default_backend())
-        encryptor = cipher.encryptor()
-        ct = encryptor.update(vec["plaintext"]) + encryptor.finalize()
-        assert ct == vec["ciphertext"], f"AES-CTR mismatch: {ct.hex()} != {vec['ciphertext'].hex()}"
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 def test_ml_kem_fips203():
     for vec in FIPS203_KAT_VECTORS:
@@ -163,26 +130,17 @@ def test_evaluate_polynomial():
         expected = (coeffs[0] + coeffs[1] * x + coeffs[2] * x * x) % FIELD_MODULUS
         assert y == expected, f"Poly eval failed at x={x}: {y} != {expected}"
 
-<<<<<<< HEAD
 def test_shamir_reconstruct():
     for secret in [0, 1, 100, 1000, 3328]:
         for n, t in [(3, 2), (5, 3), (7, 4), (10, 5)]:
             coeffs = [secret] + [secrets.randbelow(FIELD_MODULUS) for _ in range(t-1)]
             shares = [(i+1, evaluate_polynomial(coeffs, i+1)) for i in range(n)]
-=======
-def test_shamir_generate_reconstruct():
-    for secret in [0, 1, 100, 1000, 3328]:
-        for n, t in [(3, 2), (5, 3), (7, 4), (10, 5)]:
-            shares = generate_shares(secret, n, t)
-            assert len(shares) == n
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
             recon = reconstruct_secret(shares[:t])
             assert recon == secret, f"Shamir failed for secret={secret}, n={n}, t={t}: {recon} != {secret}"
             recon_all = reconstruct_secret(shares)
             assert recon_all == secret, f"Shamir all-shares failed for secret={secret}: {recon_all} != {secret}"
 
 def test_shamir_bytes():
-<<<<<<< HEAD
     # GF(3329) can only represent values 0-3328 (12 bits)
     # Use values that fit within the field
     secret_bytes = bytearray(64)
@@ -206,20 +164,11 @@ def test_shamir_bytes():
             y_bytes[2*elem_idx+1] = (y >> 8) & 0xFF
         shares.append((x, bytes(y_bytes)))
     
-=======
-    secret_bytes = bytes([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0])
-    n, t = 5, 3
-    shares = generate_shares_bytes(secret_bytes, n, t)
-    assert len(shares) == n
-    for x, y in shares:
-        assert len(y) == len(secret_bytes)
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     recon = reconstruct_secret_bytes(shares[:t])
     assert recon == secret_bytes, f"Shamir bytes failed: {recon.hex()} != {secret_bytes.hex()}"
     recon_all = reconstruct_secret_bytes(shares)
     assert recon_all == secret_bytes, f"Shamir bytes all-shares failed"
 
-<<<<<<< HEAD
 def test_shamir_field_properties():
     """Test Shamir properties: reconstruction with different subsets gives same secret"""
     for secret in [0, 1, 100, 1000, 3328]:
@@ -347,42 +296,6 @@ def test_shamir_regression_incorrect_numerator():
     assert incorrect_recon != secret, "Incorrect numerator should produce wrong result for even threshold"
     # Verify correct implementation still works
     assert correct_recon == secret
-=======
-def test_shamir_gf3329_vs_gf256_parity():
-    import secrets as py_secrets
-    FIELD_256 = 256
-    def gf256_inv(a):
-        return pow(a, 254, 256)
-    def gf256_eval(coeffs, x):
-        result = 0
-        for coeff in reversed(coeffs):
-            result = (result * x + coeff) % 256
-        return result
-    def gf256_reconstruct(shares):
-        secret = 0
-        for i, (xi, yi) in enumerate(shares):
-            num = 1
-            den = 1
-            for j, (xj, _) in enumerate(shares):
-                if i == j: continue
-                num = (num * (-xj)) % 256
-                den = (den * (xi - xj)) % 256
-            secret = (secret + yi * num * gf256_inv(den)) % 256
-        return secret
-
-    for _ in range(100):
-        secret_gf256 = py_secrets.randbelow(256)
-        secret_gf3329 = py_secrets.randbelow(FIELD_MODULUS)
-        n, t = 5, 3
-        coeffs_256 = [secret_gf256] + [py_secrets.randbelow(256) for _ in range(t-1)]
-        coeffs_3329 = [secret_gf3329] + [py_secrets.randbelow(FIELD_MODULUS) for _ in range(t-1)]
-        shares_256 = [(i+1, gf256_eval(coeffs_256, i+1)) for i in range(n)]
-        shares_3329 = [(i+1, evaluate_polynomial(coeffs_3329, i+1)) for i in range(n)]
-        recon_256 = gf256_reconstruct(shares_256[:t])
-        recon_3329 = reconstruct_secret(shares_3329[:t])
-        assert recon_256 == secret_gf256
-        assert recon_3329 == secret_gf3329
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 
 if __name__ == "__main__":
     test_hkdf_rfc5869()
@@ -391,7 +304,6 @@ if __name__ == "__main__":
     test_barrett_reduce()
     test_mod_inv()
     test_evaluate_polynomial()
-<<<<<<< HEAD
     test_shamir_reconstruct()
     test_shamir_bytes()
     test_shamir_field_properties()
@@ -401,9 +313,3 @@ if __name__ == "__main__":
     test_shamir_lagrange_basis_sum()
     test_shamir_regression_incorrect_numerator()
     print("All unit tests passed.")
-=======
-    test_shamir_generate_reconstruct()
-    test_shamir_bytes()
-    test_shamir_gf3329_vs_gf256_parity()
-    print("All unit tests passed.")
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4

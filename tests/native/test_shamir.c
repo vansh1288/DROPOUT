@@ -1,6 +1,5 @@
 #include <assert.h>
 #include <string.h>
-<<<<<<< HEAD
 #include <stdlib.h>
 #include "shamir.h"
 
@@ -55,51 +54,6 @@ static void test_shamir_2_of_5_failed_reconstruction(void) {
     int result = shamir_reconstruct(reconstructed, recon_x, recon_y, 2, workspace);
     assert(result == 0);
     assert(memcmp(reconstructed, secret, SHAMIR_SECRET_ELEMENTS * sizeof(uint16_t)) != 0);
-=======
-#include "shamir.h"
-
-static void test_shamir_3_of_5_reconstruction(void) {
-    uint16_t shares_x[5] = {1, 2, 3, 4, 5};
-    uint16_t shares_y[5][SHAMIR_SECRET_SIZE];
-    uint16_t secret[SHAMIR_SECRET_SIZE] = {0x1234, 0x5678, 0x9abc, 0xdef0};
-    uint16_t reconstructed[SHAMIR_SECRET_SIZE];
-    uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
-
-    shamir_share(secret, shares_x, shares_y, 5, 3, workspace);
-
-    uint16_t recon_x[3] = {1, 3, 5};
-    uint16_t recon_y[3][SHAMIR_SECRET_SIZE];
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < SHAMIR_SECRET_SIZE; j++) {
-            recon_y[i][j] = shares_y[recon_x[i] - 1][j];
-        }
-    }
-
-    shamir_reconstruct(reconstructed, recon_x, recon_y, 3, workspace);
-    assert(memcmp(reconstructed, secret, SHAMIR_SECRET_SIZE * sizeof(uint16_t)) == 0);
-}
-
-static void test_shamir_2_of_5_failed_reconstruction(void) {
-    uint16_t shares_x[5] = {1, 2, 3, 4, 5};
-    uint16_t shares_y[5][SHAMIR_SECRET_SIZE];
-    uint16_t secret[SHAMIR_SECRET_SIZE] = {0x1234, 0x5678, 0x9abc, 0xdef0};
-    uint16_t reconstructed[SHAMIR_SECRET_SIZE];
-    uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
-
-    shamir_share(secret, shares_x, shares_y, 5, 3, workspace);
-
-    uint16_t recon_x[2] = {1, 2};
-    uint16_t recon_y[2][SHAMIR_SECRET_SIZE];
-    for (int i = 0; i < 2; i++) {
-        for (int j = 0; j < SHAMIR_SECRET_SIZE; j++) {
-            recon_y[i][j] = shares_y[recon_x[i] - 1][j];
-        }
-    }
-
-    int result = shamir_reconstruct(reconstructed, recon_x, recon_y, 2, workspace);
-    assert(result != 0);
-    assert(memcmp(reconstructed, secret, SHAMIR_SECRET_SIZE * sizeof(uint16_t)) != 0);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }
 
 static void test_shamir_gf3329_field_operations(void) {
@@ -126,7 +80,6 @@ static void test_shamir_gf3329_field_operations(void) {
 }
 
 static void test_shamir_different_thresholds(void) {
-<<<<<<< HEAD
     uint16_t shares_x[7];
     uint16_t shares_y[7][SHAMIR_SECRET_ELEMENTS];
     uint16_t* shares_y_ptr[7];
@@ -223,47 +176,6 @@ static void test_shamir_deterministic_reproducible(void) {
         assert(memcmp(shares_y1[i], shares_y2[i], SHAMIR_SECRET_ELEMENTS * sizeof(uint16_t)) == 0);
     }
 #endif
-=======
-    uint16_t shares_x[7] = {1, 2, 3, 4, 5, 6, 7};
-    uint16_t shares_y[7][SHAMIR_SECRET_SIZE];
-    uint16_t secret[SHAMIR_SECRET_SIZE] = {0xaaaa, 0xbbbb, 0xcccc, 0xdddd};
-    uint16_t reconstructed[SHAMIR_SECRET_SIZE];
-    uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
-
-    shamir_share(secret, shares_x, shares_y, 7, 4, workspace);
-
-    uint16_t recon_x[4] = {2, 4, 6, 7};
-    uint16_t recon_y[4][SHAMIR_SECRET_SIZE];
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < SHAMIR_SECRET_SIZE; j++) {
-            recon_y[i][j] = shares_y[recon_x[i] - 1][j];
-        }
-    }
-
-    shamir_reconstruct(reconstructed, recon_x, recon_y, 4, workspace);
-    assert(memcmp(reconstructed, secret, SHAMIR_SECRET_SIZE * sizeof(uint16_t)) == 0);
-}
-
-static void test_shamir_zero_secret(void) {
-    uint16_t shares_x[5] = {1, 2, 3, 4, 5};
-    uint16_t shares_y[5][SHAMIR_SECRET_SIZE];
-    uint16_t secret[SHAMIR_SECRET_SIZE] = {0, 0, 0, 0};
-    uint16_t reconstructed[SHAMIR_SECRET_SIZE];
-    uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
-
-    shamir_share(secret, shares_x, shares_y, 5, 3, workspace);
-
-    uint16_t recon_x[3] = {1, 2, 3};
-    uint16_t recon_y[3][SHAMIR_SECRET_SIZE];
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < SHAMIR_SECRET_SIZE; j++) {
-            recon_y[i][j] = shares_y[recon_x[i] - 1][j];
-        }
-    }
-
-    shamir_reconstruct(reconstructed, recon_x, recon_y, 3, workspace);
-    assert(memcmp(reconstructed, secret, SHAMIR_SECRET_SIZE * sizeof(uint16_t)) == 0);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 }
 
 int main(void) {
@@ -272,10 +184,7 @@ int main(void) {
     test_shamir_gf3329_field_operations();
     test_shamir_different_thresholds();
     test_shamir_zero_secret();
-<<<<<<< HEAD
     test_shamir_bytes_api();
     test_shamir_deterministic_reproducible();
-=======
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
     return 0;
 }

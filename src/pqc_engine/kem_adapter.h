@@ -17,43 +17,9 @@
 #define KDF_LABEL_SHAMIR_SECRET   "SwiftAgg-ShamirSecret-v1"
 #define KDF_LABEL_SESSION_KEY     "FL-SessionKey-v1"
 
-<<<<<<< HEAD
-=======
-#define KEMLIB_ML_KEM_X25519 3
-
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-<<<<<<< HEAD
-/**
- * ML-KEM variant selection.
- * Only ML-KEM-512, ML-KEM-768, and ML-KEM-1024 are supported.
- * X25519 fallback has been removed.
- */
-typedef enum {
-    KEMLIB_ML_KEM_512  = 0,
-    KEMLIB_ML_KEM_768  = 1,
-    KEMLIB_ML_KEM_1024 = 2,
-} kem_variant_t;
-
-typedef struct {
-    kem_variant_t variant;
-    uint8_t public_key[ML_KEM_1024_PUBLIC_KEY_BYTES];
-    uint8_t secret_key[ML_KEM_1024_SECRET_KEY_BYTES];
-    size_t  public_key_len;
-    size_t  secret_key_len;
-    size_t  ciphertext_len;
-    size_t  shared_secret_len;
-} kem_keypair_t;
-
-typedef struct {
-    uint8_t ciphertext[ML_KEM_1024_CIPHERTEXT_BYTES];
-    uint8_t shared_secret[ML_KEM_1024_SHARED_SECRET_BYTES];
-    size_t  ciphertext_len;
-    size_t  shared_secret_len;
-} kem_encapsulation_t;
 
 /**
  * Initialize the KEM adapter with the specified ML-KEM variant.
@@ -105,7 +71,7 @@ pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, k
  * Decapsulate a shared secret from a ciphertext using the private key.
  * 
  * IMPORTANT: ML-KEM decapsulation uses implicit rejection (FIPS 203).
- * - This function ALWAYS returns PQC_SUCCESS on success (returns 0 from underlying implementation)
+ * - This function ALWAYS returns PQC_SUCCESS on valid inputs (underlying implementation returns 0)
  * - On ciphertext verification failure, a pseudorandom shared secret is returned in 'shared_secret'
  * - The caller MUST NOT assume the ciphertext was valid just because this function returns success
  * - Use kem_adapter_verify_decapsulation() to check if decapsulation succeeded
@@ -115,8 +81,7 @@ pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, k
  * @param secret_key  Input: ML-KEM private key
  * @param sk_len      Input: length of private key (must match variant)
  * @param shared_secret Output: derived shared secret (32 bytes)
- * @return PQC_SUCCESS on success, ERR_CRYPTO_FAILURE on implementation failure,
- *         ERR_INVALID_ARGUMENT for invalid arguments
+ * @return PQC_SUCCESS on valid inputs, ERR_INVALID_ARGUMENT for invalid arguments
  * @note Returns pseudorandom shared secret on ciphertext verification failure (implicit rejection)
  */
 pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret);
@@ -131,14 +96,6 @@ pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, c
  */
 pqc_status_t kem_adapter_verify_decapsulation(const uint8_t* expected_ss, const uint8_t* actual_ss);
 
-=======
-pqc_status_t kem_adapter_init(kem_variant_t variant);
-kem_variant_t kem_adapter_get_variant(void);
-pqc_status_t kem_adapter_get_sizes(size_t* pk_bytes, size_t* sk_bytes, size_t* ct_bytes, size_t* ss_bytes);
-pqc_status_t kem_adapter_keypair(kem_keypair_t* keypair);
-pqc_status_t kem_adapter_encapsulate(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap);
-pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, const uint8_t* secret_key, size_t sk_len, uint8_t* shared_secret);
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key);
 pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret, uint8_t client_id_a, uint8_t client_id_b, uint32_t round_id, uint8_t* mask_seed);
 pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint8_t* stream_seed);
@@ -147,13 +104,12 @@ pqc_status_t kem_adapter_zeroize_scratchpad(void);
 pqc_status_t kem_adapter_self_test(void);
 uint32_t kem_adapter_get_last_cycles(void);
 
-<<<<<<< HEAD
-=======
-pqc_status_t classical_x25519_keypair(uint8_t* pk, uint8_t* sk);
-pqc_status_t classical_x25519_encap(uint8_t* ct, uint8_t* ss, const uint8_t* pk);
-pqc_status_t classical_x25519_decap(uint8_t* ss, const uint8_t* ct, const uint8_t* sk);
+/* Deterministic test interface (only available when SHAMIR_DETERMINISTIC_RNG or KEM_DETERMINISTIC_TEST is defined) */
+#if defined(SHAMIR_DETERMINISTIC_RNG) || defined(KEM_DETERMINISTIC_TEST)
+pqc_status_t kem_adapter_keypair_derand(kem_keypair_t* keypair, const uint8_t seed[48]);
+pqc_status_t kem_adapter_encapsulate_derand(const uint8_t* public_key, size_t pk_len, kem_encapsulation_t* encap, const uint8_t seed[48]);
+#endif
 
->>>>>>> 2875321eba292240b6900b9487a8c6ee820c76c4
 #ifdef __cplusplus
 }
 #endif
