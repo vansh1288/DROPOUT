@@ -97,7 +97,43 @@ pqc_status_t kem_adapter_decapsulate(const uint8_t* ciphertext, size_t ct_len, c
 pqc_status_t kem_adapter_verify_decapsulation(const uint8_t* expected_ss, const uint8_t* actual_ss);
 
 pqc_status_t kem_adapter_derive_session_key(const uint8_t* shared_secret, const uint8_t* salt, size_t salt_len, const uint8_t* info, size_t info_len, uint8_t* session_key);
+
+/**
+ * Derive pairwise mask seed from ML-KEM shared secret.
+ * 
+ * HKDF-SHA256:
+ *   IKM = shared_secret (32 bytes)
+ *   Salt = empty (zero-filled 32 bytes)
+ *   Info = "SwiftAgg-PairwiseMask-v1" || round_id (4 bytes, big-endian) || client_id_a || client_id_b
+ *   L = 32 bytes
+ * 
+ * client_id_a and client_id_b are sorted (min, max) internally.
+ * 
+ * @param shared_secret  ML-KEM shared secret (32 bytes)
+ * @param client_id_a    First client ID
+ * @param client_id_b    Second client ID
+ * @param round_id       Round identifier
+ * @param mask_seed      Output: 32-byte pairwise mask seed
+ * @return PQC_SUCCESS on success, ERR_INVALID_ARGUMENT if inputs are NULL
+ */
 pqc_status_t kem_adapter_derive_pairwise_mask_seed(const uint8_t* shared_secret, uint8_t client_id_a, uint8_t client_id_b, uint32_t round_id, uint8_t* mask_seed);
+
+/**
+ * Derive stream mask seed from pairwise mask seed.
+ * 
+ * HKDF-SHA256:
+ *   IKM = pairwise_mask_seed (32 bytes)
+ *   Salt = empty (zero-filled 32 bytes)
+ *   Info = "SwiftAgg-StreamMask-v1" || round_id (4 bytes, big-endian) || client_id || chunk_index (2 bytes, big-endian)
+ *   L = 32 bytes
+ * 
+ * @param pairwise_mask_seed  Pairwise mask seed from derive_pairwise_mask_seed
+ * @param client_id           Client ID
+ * @param round_id            Round identifier
+ * @param chunk_index         Chunk index
+ * @param stream_seed         Output: 32-byte stream mask seed
+ * @return PQC_SUCCESS on success, ERR_INVALID_ARGUMENT if inputs are NULL
+ */
 pqc_status_t kem_adapter_derive_stream_mask_seed(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint16_t chunk_index, uint8_t* stream_seed);
 pqc_status_t kem_adapter_derive_shamir_secret(const uint8_t* shared_secret, uint8_t client_id, uint32_t round_id, uint8_t* shamir_secret);
 pqc_status_t kem_adapter_zeroize_scratchpad(void);

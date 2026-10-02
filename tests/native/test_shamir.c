@@ -17,7 +17,7 @@ static void test_shamir_3_of_5_reconstruction(void) {
     uint16_t* shares_y_ptr[5];
     for (int i = 0; i < 5; i++) shares_y_ptr[i] = shares_y[i];
     
-    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {0x1234, 0x5678, 0x9abc, 0xdef0};
+    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {1234, 567, 1000, 3328};
     for (int i = 4; i < SHAMIR_SECRET_ELEMENTS; i++) secret[i] = i;
     uint16_t reconstructed[SHAMIR_SECRET_ELEMENTS];
     uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
@@ -39,7 +39,7 @@ static void test_shamir_2_of_5_failed_reconstruction(void) {
     uint16_t* shares_y_ptr[5];
     for (int i = 0; i < 5; i++) shares_y_ptr[i] = shares_y[i];
     
-    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {0x1234, 0x5678, 0x9abc, 0xdef0};
+    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {1234, 567, 1000, 3328};
     for (int i = 4; i < SHAMIR_SECRET_ELEMENTS; i++) secret[i] = i;
     uint16_t reconstructed[SHAMIR_SECRET_ELEMENTS];
     uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
@@ -57,8 +57,8 @@ static void test_shamir_2_of_5_failed_reconstruction(void) {
 }
 
 static void test_shamir_gf3329_field_operations(void) {
-    uint16_t a = 0x1234;
-    uint16_t b = 0x5678;
+    uint16_t a = 1234;
+    uint16_t b = 567;
     uint16_t result;
     uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
 
@@ -85,7 +85,7 @@ static void test_shamir_different_thresholds(void) {
     uint16_t* shares_y_ptr[7];
     for (int i = 0; i < 7; i++) shares_y_ptr[i] = shares_y[i];
     
-    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {0xaaaa, 0xbbbb, 0xcccc, 0xdddd};
+    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {1000, 2000, 3000, 3328};
     for (int i = 4; i < SHAMIR_SECRET_ELEMENTS; i++) secret[i] = i;
     uint16_t reconstructed[SHAMIR_SECRET_ELEMENTS];
     uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
@@ -124,12 +124,12 @@ static void test_shamir_zero_secret(void) {
 }
 
 static void test_shamir_bytes_api(void) {
-    uint8_t secret[SHAMIR_SECRET_BYTES] = {
-        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
-        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-        0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00,
-        0x13, 0x57, 0x9b, 0xdf, 0x24, 0x68, 0xac, 0xf0
-    };
+    uint8_t secret[SHAMIR_SECRET_BYTES];
+    for (int i = 0; i < SHAMIR_SECRET_ELEMENTS; i++) {
+        uint16_t val = i < 4 ? (uint16_t[]){1234, 567, 1000, 3328}[i] : (uint16_t)i;
+        secret[2*i] = val & 0xFF;
+        secret[2*i + 1] = (val >> 8) & 0xFF;
+    }
     uint8_t share_x[5];
     uint8_t shares_y[5][SHAMIR_SECRET_BYTES];
     uint8_t* shares_y_ptr[5];
@@ -162,8 +162,8 @@ static void test_shamir_deterministic_reproducible(void) {
         shares_y_ptr2[i] = shares_y2[i];
     }
     
-    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {0x1111, 0x2222, 0x3333, 0x4444};
-    for (int i = 4; i < SHAMIR_SECRET_ELEMENTS; i++) secret[i] = i + 0x1000;
+    uint16_t secret[SHAMIR_SECRET_ELEMENTS] = {1000, 2000, 3000, 3328};
+    for (int i = 4; i < SHAMIR_SECRET_ELEMENTS; i++) secret[i] = i;
     uint16_t workspace[SHAMIR_WORKSPACE_SIZE];
 
     TEST_RNG_INIT((const uint8_t*)"reproducible-test-seed-0123456");
