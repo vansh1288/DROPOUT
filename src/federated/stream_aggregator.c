@@ -15,6 +15,7 @@
 static QueueHandle_t g_stream_queue = NULL;
 static StackType_t stream_stack[1024];
 static StaticTask_t stream_tcb;
+static TaskHandle_t g_stream_task_handle = NULL;
 static uint8_t stream_queue_storage[STREAM_QUEUE_LENGTH * STREAM_QUEUE_ITEM_SIZE];
 static StaticQueue_t stream_queue_struct;
 
@@ -31,12 +32,30 @@ static inline uint16_t mod_q(int32_t val) {
 
 
 void stream_aggregator_init(void) {
-    g_stream_queue = xQueueCreateStatic(STREAM_QUEUE_LENGTH, STREAM_QUEUE_ITEM_SIZE, stream_queue_storage, &stream_queue_struct);
-    xTaskCreateStatic(stream_aggregator_task, "stream_aggregator", 1024, NULL, 2, stream_stack, &stream_tcb);
+    g_stream_queue = xQueueCreateStatic(
+        STREAM_QUEUE_LENGTH,
+        STREAM_QUEUE_ITEM_SIZE,
+        stream_queue_storage,
+        &stream_queue_struct
+    );
+
+    if (g_stream_queue == NULL) {
+        return;
+    }
+
+    g_stream_task_handle = xTaskCreateStatic(
+        stream_aggregator_task,
+        "stream_aggregator",
+        1024,
+        NULL,
+        2,
+        stream_stack,
+        &stream_tcb
+    );
 }
 
 TaskHandle_t stream_aggregator_get_task_handle(void) {
-    return stream_tcb;
+    return g_stream_task_handle;
 }
 
 BaseType_t stream_aggregator_submit(const stream_work_item_t* item, TickType_t timeout) {
