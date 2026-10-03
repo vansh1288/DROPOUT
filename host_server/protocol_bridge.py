@@ -285,6 +285,17 @@ class ProtocolBridge:
             writer.write(ct_header + ciphertext)
             await writer.drain()
 
+        # Tell this (possibly late-joining) client the round's shape. Prior
+        # to this fix, nothing ever sent MSG_TYPE_ROUND_INIT back out to
+        # clients, even though the client loop expects to receive it.
+        round_init_payload = struct.pack(
+            "<BBHI", round_state.expected_clients, round_state.threshold,
+            round_state.chunk_size, round_state.model_size,
+        )
+        hdr = self._build_header(MSG_TYPE_ROUND_INIT, round_state.round_id, 0, 0, len(round_init_payload))
+        writer.write(hdr + round_init_payload)
+        await writer.drain()
+
         # Relay this new client's pubkey to every already-registered peer,
         # and every already-registered peer's pubkey to this new client --
         # PURE RELAY, the server performs no encapsulation here at all.
@@ -486,7 +497,14 @@ class ProtocolBridge:
         pair_secret = round_state.recovered_pairwise_secrets.get(_pair_key(dropout_id, peer_id))
         if pair_secret is None:
             return None
-        stream_seed = derive_stream_mask_seed(pair_secret, dropout_id, round_state.round_id, chunk_idx)
+        # IMPORTANT: both live parties in a pair must have derived their
+        # stream seed using the SAME canonical label when they were both
+        # active, or the recovered mask won't match what was actually
+        # applied. That label must not depend on which one later drops --
+        # it must always be min(dropout_id, peer_id), mirroring the rule
+        # live clients follow in mock_client.py's _stream_seed_for_peer.
+        canonical_id = min(dropout_id, peer_id)
+        stream_seed = derive_stream_mask_seed(pair_secret, canonical_id, round_state.round_id, chunk_idx)
         return generate_mask_from_seed(stream_seed, round_state.chunk_size * 2)
 
     # ------------------------------------------------------------------
