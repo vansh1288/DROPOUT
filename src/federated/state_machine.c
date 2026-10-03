@@ -5,9 +5,13 @@
 #include "shamir.h"
 #include "dropout_protocol.h"
 #include "packet_codec.h"
+#ifdef TEST_BUILD
+#include "freertos_mock.h"
+#else
 #include "FreeRTOS.h"
 #include "task.h"
 #include "timers.h"
+#endif
 #include <stdint.h>
 #include <string.h>
 

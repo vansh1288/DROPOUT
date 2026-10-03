@@ -3,9 +3,13 @@
 #include "protocol_types.h"
 #include "dma_stream_bridge.h"
 #include "stream_aggregator.h"
+#ifdef TEST_BUILD
+#include "freertos_mock.h"
+#else
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#endif
 #include <stdint.h>
 
 static volatile uint8_t g_dma_rx_active = 0;

@@ -4,9 +4,13 @@
 #include "mask_prg.h"
 #include "kem_adapter.h"
 #include "dma_stream_bridge.h"
+#ifdef TEST_BUILD
+#include "freertos_mock.h"
+#else
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
+#endif
 #include "telemetry.h"
 #include <stdint.h>
 #include <string.h>

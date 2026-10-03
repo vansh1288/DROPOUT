@@ -5,6 +5,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef TEST_BUILD
+typedef long BaseType_t;
+#define pdFALSE ((BaseType_t)0)
+#define pdTRUE ((BaseType_t)1)
+#else
+#include "FreeRTOS.h"
+#include "task.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

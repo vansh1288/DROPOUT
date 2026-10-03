@@ -1,7 +1,12 @@
 #include "protocol_types.h"
 #include "memory_scratchpad.h"
+#include "crypto_memory.h"
 #include "kem_adapter.h"
+#ifdef TEST_BUILD
+#include "mask_prg_mock.h"
+#else
 #include "mask_prg.h"
+#endif
 #include <stdint.h>
 #include <string.h>
 

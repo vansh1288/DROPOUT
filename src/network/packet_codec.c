@@ -124,6 +124,9 @@ void packet_codec_build_aad(const aad_context_t* ctx, uint8_t* aad, size_t* aad_
     *aad_len = idx;
 }
 
+/* Internal helper to build MAC data with AAD - forward declaration */
+static void packet_codec_build_aad_data(const aad_context_t* ctx, uint8_t* mac_data, size_t* mac_data_len);
+
 /* Enhanced validation with AAD binding */
 pqc_status_t packet_codec_validate_message(const msg_header_t* hdr, const aad_context_t* expected_aad, const uint8_t* mac_key, const uint8_t* received_mac) {
     if (!hdr || !expected_aad || !mac_key || !received_mac) return ERR_INVALID_ARGUMENT;
@@ -156,7 +159,7 @@ pqc_status_t packet_codec_validate_message(const msg_header_t* hdr, const aad_co
     /* Build MAC data with AAD binding */
     uint8_t mac_data[12 + 1024];
     size_t mac_data_len = 12;
-    packet_codec_build_aad_data(&expected_aad, mac_data, &mac_data_len);
+    packet_codec_build_aad_data(expected_aad, mac_data, &mac_data_len);
 
     return packet_codec_verify_mac(NULL, mac_data, mac_data_len, received_mac);
 }

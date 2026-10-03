@@ -1,8 +1,12 @@
 #include "dma_stream_bridge.h"
 #include "memory_scratchpad.h"
+#ifdef TEST_BUILD
+#include "freertos_mock.h"
+#else
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
+#endif
 #include <string.h>
 #include <stdint.h>
 
