@@ -326,10 +326,14 @@ static void test_dma_stream_bridge_stats(void) {
     assert(dropped == 0);
 
     // Force a drop
+    uint8_t* buffer = NULL;
+    uint16_t max_len = 0;
+
     dma_stream_bridge_get_rx_buffer(&g_test_bridge, &buffer, &max_len);
     dma_stream_bridge_rx_complete_isr(&g_test_bridge, 256);
     dma_stream_bridge_get_rx_buffer(&g_test_bridge, &buffer, &max_len);
     dma_stream_bridge_rx_complete_isr(&g_test_bridge, 256);
+
     // Now both buffers full, next get should fail
     uint8_t* buffer2 = NULL;
     uint16_t max_len2 = 0;

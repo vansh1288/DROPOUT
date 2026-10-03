@@ -1,114 +1,40 @@
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
+
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
 #include "kem_adapter.h"
 #include "stream_aggregator.h"
 #include "crypto_worker.h"
 #include "dma_transport.h"
-#include "state_machine.h"
 #include "telemetry.h"
 #include "dma_isr_handler.h"
-#include "dma_stream_bridge.h"
+
 #include <string.h>
 
+/*
+ * Global scratchpad.
+ *
+ * The scratchpad is initialized before any protocol/crypto subsystem
+ * starts using it.
+ */
 union Global_Scratchpad g_scratchpad;
 
-/* Task stacks and TCBs */
-static StackType_t network_stack[1024];
-static StaticTask_t network_tcb;
-
-static StackType_t monitor_stack[1024];
-static StaticTask_t monitor_tcb;
-
-static StackType_t crypto_stack[1024];
-static StaticTask_t crypto_tcb;
-
-static StackType_t stream_stack[1024];
-static StaticTask_t stream_tcb;
-
-/* Protocol context management */
+/*
+ * Protocol context management.
+ *
+ * The contexts are owned by this RTOS/application layer and are accessed
+ * by the state monitor task.
+ */
 static client_protocol_ctx_t g_client_contexts[MAX_CLIENTS] = {0};
-static uint8_t g_num_contexts = 0;
 
-/* Queues for inter-task communication */
-#define NETWORK_QUEUE_LENGTH 16
-#define NETWORK_QUEUE_ITEM_SIZE sizeof(network_msg_t)
-
-static QueueHandle_t g_network_queue = NULL;
-static uint8_t network_queue_storage[NETWORK_QUEUE_LENGTH * NETWORK_QUEUE_ITEM_SIZE];
-static StaticQueue_t network_queue_struct;
-
-/* Protocol context registration */
-void protocol_register_context(client_protocol_ctx_t* ctx) {
-    if (!ctx) return;
-    for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_client_contexts[i].client_id == 0 || g_client_contexts[i].client_id == ctx->client_id) {
-            g_client_contexts[i] = *ctx;
-            return;
-        }
-    }
-}
-
-/* Protocol timeout checking */
-static void protocol_check_timeouts(void) {
-    uint32_t current_tick = xTaskGetTickCount();
-    for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_client_contexts[i].client_id != 0 &&
-            g_client_contexts[i].state != STATE_ROUND_COMPLETE &&
-            g_client_contexts[i].state != STATE_ERROR) {
-            if (current_tick - g_client_contexts[i].last_activity_tick > g_client_contexts[i].timeout_ms) {
-                g_client_contexts[i].state = STATE_ERROR;
-                /* Buffer cleanup on timeout */
-                stream_aggregator_zeroize_accumulator();
-            }
-        }
-    }
-}
-
-/* Network coordinator task - handles DMA transport polling */
-static void network_coordinator_task(void* pvParameters) {
-    while (1) {
-        uint32_t notify = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
-        if (notify & 0x01) {
-            dma_transport_rx_poll();
-        }
-        if (notify & 0x02) {
-            dma_transport_tx_poll();
-        }
-        
-        /* Process network queue if any */
-        network_msg_t msg;
-        if (xQueueReceive(g_network_queue, &msg, 0) == pdTRUE) {
-            /* Handle network messages if needed */
-        }
-    }
-}
-
-/* State monitor task - checks for protocol timeouts */
-static void state_monitor_task(void* pvParameters) {
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        protocol_check_timeouts();
-        
-        /* Check for stuck buffers and clean up */
-        for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-            if (g_client_contexts[i].client_id != 0 &&
-                g_client_contexts[i].state != STATE_ROUND_COMPLETE &&
-                g_client_contexts[i].state != STATE_ERROR) {
-                uint32_t current_tick = xTaskGetTickCount();
-                if (current_tick - g_client_contexts[i].last_activity_tick > 
-                    pdMS_TO_TICKS(STATE_TIMEOUT_MS)) {
-                    /* Force cleanup on stuck state */
-                    g_client_contexts[i].state = STATE_ERROR;
-                    stream_aggregator_zeroize_accumulator();
-                }
-            }
-        }
-    }
-}
-
-/* Network message structure for queue */
+/*
+ * Network message structure used by the RTOS network queue.
+ *
+ * The type must be defined before NETWORK_QUEUE_ITEM_SIZE because the
+ * queue storage size depends on sizeof(network_msg_t).
+ */
 typedef struct {
     uint32_t round_id;
     uint8_t client_id;
@@ -118,178 +44,359 @@ typedef struct {
     uint8_t payload[256];
 } network_msg_t;
 
-/* Network message queue send */
-BaseType_t network_queue_send(const network_msg_t* msg, TickType_t timeout) {
-    if (!g_network_queue) return pdFALSE;
-    return xQueueSend(g_network_queue, msg, timeout);
-}
+/*
+ * Network queue configuration.
+ */
+#define NETWORK_QUEUE_LENGTH      16u
+#define NETWORK_QUEUE_ITEM_SIZE   sizeof(network_msg_t)
 
-/* Main application entry point */
-void app_main(void) {
-    BaseType_t ret;
-    
-    /* 1. Initialize scratchpad (must be first) */
-    memset(&g_scratchpad, 0, sizeof(union Global_Scratchpad));
-    
-    /* 2. Initialize telemetry (early for logging) */
-    telemetry_init();
-    
-    /* 3. Initialize DMA subsystem */
-    dma_isr_init();
-    dma_isr_set_stream_task(NULL);  /* Will be set after stream aggregator init */
-    
-    /* 4. Initialize crypto dependencies */
-    ret = kem_adapter_init(KEMLIB_ML_KEM_768);
-    if (ret != PQC_SUCCESS) {
-        /* Fatal error - cannot proceed without crypto */
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 5. Initialize crypto worker (depends on kem_adapter) */
-    ret = crypto_worker_init();
-    if (ret != pdPASS) {
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 6. Initialize stream aggregator (depends on kem_adapter) */
-    stream_aggregator_init();
-    
-    /* 7. Initialize DMA transport (depends on DMA ISR) */
-    ret = dma_transport_init(-1, -1);  /* Sockets will be set later */
-    if (ret != PQC_SUCCESS) {
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 8. Initialize stream aggregator */
-    stream_aggregator_init();
-    
-    /* 9. Initialize DMA stream bridge */
-    dma_stream_bridge_init(stream_aggregator_get_dma_bridge(), 1000);
-    
-    /* 10. Initialize DMA ISR and connect to stream aggregator task */
-    dma_isr_init();
-    TaskHandle_t stream_task_handle = stream_aggregator_get_task_handle();
-    dma_isr_set_stream_task(stream_task_handle);
-    
-    /* 11. Create network queue for inter-task communication */
-    g_network_queue = xQueueCreateStatic(NETWORK_QUEUE_LENGTH, 
-                                          NETWORK_QUEUE_ITEM_SIZE, 
-                                          (uint8_t*)network_queue_storage, 
-                                          &network_queue_struct);
-    if (!g_network_queue) {
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 12. Create tasks (priority order: crypto=3, stream=2, network=2, monitor=1) */
-    
-    /* Stream processor task (priority 2) */
-    static StackType_t stream_stack[1024];
-    static StaticTask_t stream_tcb;
-    ret = xTaskCreateStatic(stream_aggregator_task, "stream_proc", 1024, NULL, 2, stream_stack, &stream_tcb);
-    if (ret == NULL) { while (1) { vTaskDelay(portMAX_DELAY); } }
-    
-    /* Crypto worker task (priority 3) - highest for crypto ops */
-    static StackType_t crypto_stack[1024];
-    static StaticTask_t crypto_tcb;
-    ret = xTaskCreateStatic(crypto_worker_task, "crypto_worker", 1024, NULL, 3, crypto_stack, &crypto_tcb);
-    if (ret == NULL) { while (1) { vTaskDelay(portMAX_DELAY); } }
-    
-    /* Network coordinator task (priority 2) */
-    static StackType_t network_stack[1024];
-    static StaticTask_t network_tcb;
-    ret = xTaskCreateStatic(network_coordinator_task, "network_coord", 1024, NULL, 2, network_stack, &network_tcb);
-    if (ret == NULL) { while (1) { vTaskDelay(portMAX_DELAY); } }
-    
-    /* State monitor task (priority 1) */
-    static StackType_t monitor_stack[1024];
-    static StaticTask_t monitor_tcb;
-    ret = xTaskCreateStatic(state_monitor_task, "state_monitor", 1024, NULL, 1, monitor_stack, &monitor_tcb);
-    if (ret == NULL) { while (1) { vTaskDelay(portMAX_DELAY); } }
-    
-    /* 13. Set stream task handle for DMA ISR callbacks */
-    TaskHandle_t stream_task_handle = stream_aggregator_get_task_handle();
-    dma_isr_set_stream_task(stream_task_handle);
-    
-    /* 13. Initialize DMA transport (now that queues/tasks are ready) */
-    dma_isr_init();
-    
-    /* 14. Initialize KEM adapter (after all deps are ready) */
-    pqc_status_t ret = kem_adapter_init(KEMLIB_ML_KEM_768);
-    if (ret != PQC_SUCCESS) {
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 15. Initialize DMA transport */
-    ret = dma_transport_init(-1, -1);
-    if (ret != PQC_SUCCESS) {
-        while (1) { vTaskDelay(portMAX_DELAY); }
-    }
-    
-    /* 16. Initialize DMA stream bridge */
-    dma_stream_bridge_init(stream_aggregator_get_dma_bridge(), 1000);
-    
-    /* 17. Start FreeRTOS scheduler */
-    vTaskStartScheduler();
-    
-    /* Should never reach here */
-    while (1);
-}
+static QueueHandle_t g_network_queue = NULL;
 
-/* Shutdown/cleanup handler - called on fatal error or shutdown */
-void system_shutdown(void) {
-    /* Disable interrupts */
-    taskDISABLE_INTERRUPTS();
-    
-    /* Zeroize all sensitive buffers */
-    crypto_zeroize(&g_scratchpad, sizeof(union Global_Scratchpad));
-    stream_aggregator_zeroize_accumulator();
-    crypto_zeroize(&g_client_contexts, sizeof(g_client_contexts));
-    
-    /* Disable DMA */
-    dma_isr_init();  /* Re-init to reset DMA state */
-    
-    /* Suspend all tasks */
-    vTaskSuspendAll();
-    
-    /* Infinite loop - system halted */
-    while (1) {
-        __NOP();
+static uint8_t network_queue_storage[
+    NETWORK_QUEUE_LENGTH * NETWORK_QUEUE_ITEM_SIZE
+];
+
+static StaticQueue_t network_queue_struct;
+
+
+/*
+ * Register or update a protocol context.
+ *
+ * A client_id of zero is treated as an unused context slot.
+ */
+void protocol_register_context(client_protocol_ctx_t* ctx)
+{
+    if (ctx == NULL) {
+        return;
     }
-}
 
-/* Error handler for task creation failures */
-void handle_task_creation_failure(const char* task_name) {
-    telemetry_record_error(ERR_HEAP_EXHAUSTED);
-    system_shutdown();
-}
-
-/* Buffer cleanup on timeout - called from state_monitor_task */
-void protocol_check_timeouts(void) {
-    uint32_t current_tick = xTaskGetTickCount();
     for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_client_contexts[i].client_id != 0 &&
-            g_client_contexts[i].state != STATE_ROUND_COMPLETE &&
-            g_client_contexts[i].state != STATE_ERROR) {
-            if (current_tick - g_client_contexts[i].last_activity_tick > 
-                g_client_contexts[i].timeout_ms) {
-                g_client_contexts[i].state = STATE_ERROR;
-                /* Cleanup buffers on timeout */
-                stream_aggregator_zeroize_accumulator();
-            }
-        }
-    }
-}
-
-/* Protocol context registration */
-void protocol_register_context(client_protocol_ctx_t* ctx) {
-    if (!ctx) return;
-    for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_client_contexts[i].client_id == 0 || 
+        if (g_client_contexts[i].client_id == 0u ||
             g_client_contexts[i].client_id == ctx->client_id) {
+
             g_client_contexts[i] = *ctx;
             return;
         }
     }
 }
 
-#endif
+
+/*
+ * Check protocol contexts for timeout.
+ *
+ * client_protocol_ctx_t::timeout_ms is expressed in milliseconds,
+ * whereas xTaskGetTickCount() returns FreeRTOS ticks. Convert the
+ * configured timeout before comparing the values.
+ */
+static void protocol_check_timeouts(void)
+{
+    const TickType_t current_tick = xTaskGetTickCount();
+
+    for (uint8_t i = 0; i < MAX_CLIENTS; i++) {
+
+        client_protocol_ctx_t* ctx = &g_client_contexts[i];
+
+        if (ctx->client_id == 0u) {
+            continue;
+        }
+
+        if (ctx->state == STATE_ROUND_COMPLETE ||
+            ctx->state == STATE_ERROR) {
+            continue;
+        }
+
+        const TickType_t timeout_ticks =
+            pdMS_TO_TICKS(ctx->timeout_ms);
+
+        if ((current_tick - ctx->last_activity_tick) >
+            timeout_ticks) {
+
+            ctx->state = STATE_ERROR;
+
+            /*
+             * Clear sensitive aggregation state when a protocol
+             * context expires.
+             */
+            stream_aggregator_zeroize_accumulator();
+        }
+    }
+}
+
+
+/*
+ * Network coordinator task.
+ *
+ * The DMA transport does not currently notify this task directly.
+ * Therefore the task performs periodic polling instead of depending
+ * on task-notification bits that may never be generated.
+ */
+static void network_coordinator_task(void* pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;) {
+
+        /*
+         * Poll the DMA/network transport periodically.
+         */
+        (void)dma_transport_rx_poll();
+        (void)dma_transport_tx_poll();
+
+        /*
+         * Process any queued application-level network messages.
+         *
+         * Message handling will be integrated when the packet/transport
+         * layer is finalized.
+         */
+        if (g_network_queue != NULL) {
+
+            network_msg_t msg;
+
+            if (xQueueReceive(
+                    g_network_queue,
+                    &msg,
+                    0) == pdTRUE) {
+
+                /*
+                 * Packet/message handling is intentionally left to the
+                 * transport validation layer.
+                 */
+                (void)msg;
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+}
+
+
+/*
+ * State monitor task.
+ *
+ * Performs periodic protocol timeout checking.
+ */
+static void state_monitor_task(void* pvParameters)
+{
+    (void)pvParameters;
+
+    for (;;) {
+
+        protocol_check_timeouts();
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+
+/*
+ * Send a message to the network coordinator queue.
+ */
+BaseType_t network_queue_send(
+    const network_msg_t* msg,
+    TickType_t timeout)
+{
+    if (g_network_queue == NULL || msg == NULL) {
+        return pdFALSE;
+    }
+
+    return xQueueSend(g_network_queue, msg, timeout);
+}
+
+
+/*
+ * Main application entry point.
+ */
+void app_main(void)
+{
+    TaskHandle_t stream_task_handle;
+
+    /*
+     * 1. Initialize the global scratchpad first.
+     */
+    memset(
+        &g_scratchpad,
+        0,
+        sizeof(union Global_Scratchpad)
+    );
+
+    /*
+     * 2. Initialize telemetry before other subsystems so that
+     *    initialization/runtime measurements are available.
+     */
+    telemetry_init();
+
+    /*
+     * 3. Initialize the KEM adapter.
+     *
+     *    This must happen before crypto worker and stream aggregator
+     *    initialization because both depend on the crypto subsystem.
+     */
+    if (kem_adapter_init(KEMLIB_ML_KEM_768) != PQC_SUCCESS) {
+        system_shutdown();
+    }
+
+    /*
+     * 4. Initialize the crypto worker.
+     *
+     *    crypto_worker_init() creates its own queue and FreeRTOS task.
+     *    Do not create another crypto task here.
+     */
+    crypto_worker_init();
+
+    /*
+     * 5. Initialize the streaming aggregator.
+     *
+     *    stream_aggregator_init() creates its own queue/task and
+     *    initializes its DMA stream bridge.
+     */
+    stream_aggregator_init();
+
+    /*
+     * 6. Initialize DMA/network transport.
+     *
+     *    dma_transport_init() initializes the DMA ISR state internally.
+     *    Therefore no separate dma_isr_init() call is required here.
+     */
+    if (dma_transport_init(-1, -1) != PQC_SUCCESS) {
+        system_shutdown();
+    }
+
+    /*
+     * 7. The DMA transport initialization resets the ISR task handle.
+     *    Connect the DMA ISR to the stream aggregator task only after
+     *    transport initialization has completed.
+     */
+    stream_task_handle = stream_aggregator_get_task_handle();
+
+    if (stream_task_handle == NULL) {
+        system_shutdown();
+    }
+
+    dma_isr_set_stream_task(stream_task_handle);
+
+    /*
+     * 8. Create the application-level network queue.
+     */
+    g_network_queue = xQueueCreateStatic(
+        NETWORK_QUEUE_LENGTH,
+        NETWORK_QUEUE_ITEM_SIZE,
+        network_queue_storage,
+        &network_queue_struct
+    );
+
+    if (g_network_queue == NULL) {
+        system_shutdown();
+    }
+
+    /*
+     * 9. Create the network coordinator task.
+     *
+     *    Crypto and stream tasks are already created by their respective
+     *    subsystem initialization functions.
+     */
+    static StackType_t network_stack[1024];
+    static StaticTask_t network_tcb;
+
+    TaskHandle_t network_task_handle = xTaskCreateStatic(
+        network_coordinator_task,
+        "network_coord",
+        1024,
+        NULL,
+        2,
+        network_stack,
+        &network_tcb
+    );
+
+    if (network_task_handle == NULL) {
+        handle_task_creation_failure("network_coord");
+    }
+
+    /*
+     * 10. Create the state monitor task.
+     */
+    static StackType_t monitor_stack[1024];
+    static StaticTask_t monitor_tcb;
+
+    TaskHandle_t monitor_task_handle = xTaskCreateStatic(
+        state_monitor_task,
+        "state_monitor",
+        1024,
+        NULL,
+        1,
+        monitor_stack,
+        &monitor_tcb
+    );
+
+    if (monitor_task_handle == NULL) {
+        handle_task_creation_failure("state_monitor");
+    }
+
+    /*
+     * 11. Start the FreeRTOS scheduler.
+     */
+    vTaskStartScheduler();
+
+    /*
+     * Scheduler should never return.
+     */
+    for (;;) {
+        /* System halted if scheduler exits unexpectedly. */
+    }
+}
+
+
+/*
+ * Shutdown/cleanup handler.
+ */
+void system_shutdown(void)
+{
+    /*
+     * Disable task-level interrupts first.
+     */
+    taskDISABLE_INTERRUPTS();
+
+    /*
+     * Zeroize sensitive application state.
+     */
+    crypto_zeroize(
+        &g_scratchpad,
+        sizeof(union Global_Scratchpad)
+    );
+
+    stream_aggregator_zeroize_accumulator();
+
+    crypto_zeroize(
+        &g_client_contexts,
+        sizeof(g_client_contexts)
+    );
+
+    /*
+     * Reset DMA software state.
+     *
+     * This is a software reset/cleanup operation; actual hardware
+     * peripheral shutdown will be handled in the DMA integration step.
+     */
+    dma_isr_init();
+
+    /*
+     * Suspend the scheduler and halt the system.
+     */
+    vTaskSuspendAll();
+
+    for (;;) {
+        __NOP();
+    }
+}
+
+
+/*
+ * Handle a FreeRTOS task creation failure.
+ */
+void handle_task_creation_failure(const char* task_name)
+{
+    (void)task_name;
+
+    telemetry_record_error(ERR_HEAP_EXHAUSTED);
+
+    system_shutdown();
+}

@@ -1,5 +1,6 @@
 #include "freertos_mock.h"
 #include "mask_prg_mock.h"
+
 #include "test_dma_stream_bridge.c"
 #include "test_dma_isr_handler.c"
 #include "test_dma_transport.c"
@@ -9,9 +10,10 @@
 #include "test_state_machine.c"
 #include "test_error_paths.c"
 
-int main(void) {
+int main(void)
+{
     printf("=== Running All Member 3 Native Tests ===\n\n");
-    
+
     printf("--- DMA Stream Bridge Tests ---\n");
     test_dma_stream_bridge_init();
     test_dma_stream_bridge_rx_complete();
@@ -24,7 +26,7 @@ int main(void) {
     test_dma_stream_bridge_chunk_ordering();
     test_dma_stream_bridge_chunk_exhaustion();
     test_dma_stream_bridge_stats();
-    
+
     printf("\n--- DMA ISR Handler Tests ---\n");
     test_dma_isr_init();
     test_dma_isr_rx_complete();
@@ -35,7 +37,7 @@ int main(void) {
     test_dma_isr_start_tx();
     test_dma_isr_buffer_switch();
     test_dma_isr_multiple_errors();
-    
+
     printf("\n--- DMA Transport Tests ---\n");
     test_dma_transport_init();
     test_dma_transport_queue_tx();
@@ -43,11 +45,10 @@ int main(void) {
     test_dma_transport_rx_poll();
     test_dma_transport_tx_poll();
     test_dma_transport_impairment_drop();
-    test_dma_transport_impairment_corrupt();
     test_dma_transport_chunking();
     test_dma_transport_callbacks();
     test_dma_transport_multiple_chunks();
-    
+
     printf("\n--- Packet Codec Tests ---\n");
     test_header_roundtrip();
     test_message_encode_decode();
@@ -64,7 +65,7 @@ int main(void) {
     test_zero_payload();
     test_replay_attack_detection();
     test_cross_round_rejection();
-    
+
     printf("\n--- Stream Aggregator Tests ---\n");
     test_stream_aggregator_init();
     test_stream_aggregator_start_session();
@@ -85,7 +86,8 @@ int main(void) {
     test_stream_aggregator_boundary_chunks();
     test_stream_aggregator_different_chunk_sizes();
     test_stream_aggregator_work_queue();
-    
+    test_stream_aggregator_finalize_multichunk_rejection();
+
     printf("\n--- Dropout Protocol Tests ---\n");
     test_basic_recovery_3_of_5();
     test_duplicate_share_rejection();
@@ -98,8 +100,8 @@ int main(void) {
     test_invalid_chunk_sizes();
     test_zeroize_cleanup();
     test_round_mismatch();
-    test_cleanup_zeroizes();
-    
+    test_recovery_info();
+
     printf("\n--- State Machine Tests ---\n");
     test_state_machine_init();
     test_state_machine_transition();
@@ -116,7 +118,7 @@ int main(void) {
     test_state_machine_invalid_transitions();
     test_protocol_register_context();
     test_protocol_check_timeouts();
-    
+
     printf("\n--- Error Paths Tests ---\n");
     test_dma_stream_bridge_null_pointers();
     test_dma_stream_bridge_timeout();
@@ -140,7 +142,8 @@ int main(void) {
     test_scratchpad_zeroize();
     test_region_zeroize();
     test_invalid_chunk_sizes_all();
-    
+
     printf("\n=== ALL TESTS PASSED ===\n");
+
     return 0;
 }

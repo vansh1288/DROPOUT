@@ -8,20 +8,44 @@
 #define MAC_OFFSET (HEADER_SIZE)
 #define PAYLOAD_OFFSET (HEADER_SIZE + MAC_SIZE)
 
-static void build_mac_data(const msg_header_t* hdr, const uint8_t* payload, size_t payload_len, uint8_t* mac_data) {
+/*
+ * MAC data consists of:
+ *   protocol_version : 4 bytes
+ *   round_id         : 4 bytes
+ *   client_id        : 1 byte
+ *   message_type     : 1 byte
+ *   sequence_number  : 2 bytes
+ *   payload          : up to MAX_CHUNK_SIZE bytes
+ *
+ * Total fixed portion = 12 bytes.
+ */
+#define MAC_DATA_FIXED_SIZE 12u
+#define MAX_MAC_DATA_SIZE   (MAC_DATA_FIXED_SIZE + MAX_CHUNK_SIZE)
+
+static void build_mac_data(
+    const msg_header_t* hdr,
+    const uint8_t* payload,
+    size_t payload_len,
+    uint8_t* mac_data)
+{
     size_t idx = 0;
+
     mac_data[idx++] = (hdr->protocol_version >> 24) & 0xFF;
     mac_data[idx++] = (hdr->protocol_version >> 16) & 0xFF;
     mac_data[idx++] = (hdr->protocol_version >> 8) & 0xFF;
     mac_data[idx++] = hdr->protocol_version & 0xFF;
+
     mac_data[idx++] = (hdr->round_id >> 24) & 0xFF;
     mac_data[idx++] = (hdr->round_id >> 16) & 0xFF;
     mac_data[idx++] = (hdr->round_id >> 8) & 0xFF;
     mac_data[idx++] = hdr->round_id & 0xFF;
+
     mac_data[idx++] = hdr->client_id;
     mac_data[idx++] = hdr->message_type;
+
     mac_data[idx++] = (hdr->sequence_number >> 8) & 0xFF;
     mac_data[idx++] = hdr->sequence_number & 0xFF;
+
     if (payload && payload_len > 0) {
         for (size_t i = 0; i < payload_len; i++) {
             mac_data[idx++] = payload[i];
@@ -29,107 +53,248 @@ static void build_mac_data(const msg_header_t* hdr, const uint8_t* payload, size
     }
 }
 
-pqc_status_t packet_codec_encode_header(const msg_header_t* hdr, uint8_t* out) {
-    if (!hdr || !out) return ERR_INVALID_ARGUMENT;
+pqc_status_t packet_codec_encode_header(
+    const msg_header_t* hdr,
+    uint8_t* out)
+{
+    if (!hdr || !out) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
     out[0] = (hdr->protocol_version >> 24) & 0xFF;
     out[1] = (hdr->protocol_version >> 16) & 0xFF;
     out[2] = (hdr->protocol_version >> 8) & 0xFF;
     out[3] = hdr->protocol_version & 0xFF;
+
     out[4] = (hdr->round_id >> 24) & 0xFF;
     out[5] = (hdr->round_id >> 16) & 0xFF;
     out[6] = (hdr->round_id >> 8) & 0xFF;
     out[7] = hdr->round_id & 0xFF;
+
     out[8] = hdr->client_id;
     out[9] = hdr->message_type;
+
     out[10] = (hdr->sequence_number >> 8) & 0xFF;
     out[11] = hdr->sequence_number & 0xFF;
+
     out[12] = (hdr->payload_length >> 8) & 0xFF;
     out[13] = hdr->payload_length & 0xFF;
+
     out[14] = (hdr->reserved >> 8) & 0xFF;
     out[15] = hdr->reserved & 0xFF;
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_decode_header(const uint8_t* in, msg_header_t* hdr) {
-    if (!in || !hdr) return ERR_INVALID_ARGUMENT;
-    hdr->protocol_version = ((uint32_t)in[0] << 24) | ((uint32_t)in[1] << 16) | ((uint32_t)in[2] << 8) | in[3];
-    hdr->round_id = ((uint32_t)in[4] << 24) | ((uint32_t)in[5] << 16) | ((uint32_t)in[6] << 8) | in[7];
+pqc_status_t packet_codec_decode_header(
+    const uint8_t* in,
+    msg_header_t* hdr)
+{
+    if (!in || !hdr) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    hdr->protocol_version =
+        ((uint32_t)in[0] << 24) |
+        ((uint32_t)in[1] << 16) |
+        ((uint32_t)in[2] << 8) |
+        in[3];
+
+    hdr->round_id =
+        ((uint32_t)in[4] << 24) |
+        ((uint32_t)in[5] << 16) |
+        ((uint32_t)in[6] << 8) |
+        in[7];
+
     hdr->client_id = in[8];
     hdr->message_type = in[9];
-    hdr->sequence_number = ((uint16_t)in[10] << 8) | in[11];
-    hdr->payload_length = ((uint16_t)in[12] << 8) | in[13];
-    hdr->reserved = ((uint16_t)in[14] << 8) | in[15];
+
+    hdr->sequence_number =
+        ((uint16_t)in[10] << 8) |
+        in[11];
+
+    hdr->payload_length =
+        ((uint16_t)in[12] << 8) |
+        in[13];
+
+    hdr->reserved =
+        ((uint16_t)in[14] << 8) |
+        in[15];
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_compute_mac(const uint8_t* key, const uint8_t* data, size_t data_len, uint8_t* mac) {
-    if (!key || !data || !mac) return ERR_INVALID_ARGUMENT;
+pqc_status_t packet_codec_compute_mac(
+    const uint8_t* key,
+    const uint8_t* data,
+    size_t data_len,
+    uint8_t* mac)
+{
+    if (!key || !data || !mac) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
     struct tc_hmac_state_struct hmac;
+
     tc_hmac_set_key(&hmac, key, 32);
     tc_hmac_init(&hmac);
     tc_hmac_update(&hmac, data, data_len);
     tc_hmac_final(mac, 32, &hmac);
+
     return PQC_SUCCESS;
 }
 
-static int crypto_ct_memcmp(const uint8_t* a, const uint8_t* b, size_t len) {
+static int crypto_ct_memcmp(
+    const uint8_t* a,
+    const uint8_t* b,
+    size_t len)
+{
     uint8_t diff = 0;
+
     for (size_t i = 0; i < len; i++) {
         diff |= a[i] ^ b[i];
     }
+
     return (int)diff;
 }
 
-pqc_status_t packet_codec_verify_mac(const uint8_t* key, const uint8_t* data, size_t data_len, const uint8_t* mac) {
-    if (!key || !data || !mac) return ERR_INVALID_ARGUMENT;
-    uint8_t expected_mac[32];
-    pqc_status_t ret = packet_codec_compute_mac(key, data, data_len, expected_mac);
-    if (ret != PQC_SUCCESS) return ret;
-    if (crypto_ct_memcmp(expected_mac, mac, 32) != 0) return ERR_AUTH_FAILED;
+pqc_status_t packet_codec_verify_mac(
+    const uint8_t* key,
+    const uint8_t* data,
+    size_t data_len,
+    const uint8_t* mac)
+{
+    if (!key || !data || !mac) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    uint8_t expected_mac[MAC_SIZE];
+
+    pqc_status_t ret =
+        packet_codec_compute_mac(
+            key,
+            data,
+            data_len,
+            expected_mac);
+
+    if (ret != PQC_SUCCESS) {
+        return ret;
+    }
+
+    if (crypto_ct_memcmp(
+            expected_mac,
+            mac,
+            MAC_SIZE) != 0) {
+        return ERR_AUTH_FAILED;
+    }
+
     return PQC_SUCCESS;
 }
 
 /* Chunk tracker for duplicate detection */
-void packet_codec_tracker_init(chunk_tracker_t* tracker) {
+void packet_codec_tracker_init(chunk_tracker_t* tracker)
+{
     if (tracker) {
         tracker->count = 0;
     }
 }
 
-pqc_status_t packet_codec_tracker_check(chunk_tracker_t* tracker, uint16_t seq_num) {
-    if (!tracker) return ERR_INVALID_ARGUMENT;
+pqc_status_t packet_codec_tracker_check(
+    chunk_tracker_t* tracker,
+    uint16_t seq_num)
+{
+    if (!tracker) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
     for (uint8_t i = 0; i < tracker->count; i++) {
         if (tracker->sequence_numbers[i] == seq_num) {
             return ERR_REPLAY_DETECTED;
         }
     }
-    if (tracker->count < MAX_TRACKED_CHUNKS) {
-        tracker->sequence_numbers[tracker->count++] = seq_num;
+
+    /*
+     * Do not silently accept new sequence numbers when
+     * the tracker has no remaining capacity.
+     */
+    if (tracker->count >= MAX_TRACKED_CHUNKS) {
+        return ERR_BUFFER_TOO_SMALL;
     }
+
+    tracker->sequence_numbers[tracker->count++] = seq_num;
+
     return PQC_SUCCESS;
 }
 
-/* Build AAD (Additional Authenticated Data) for authenticated encryption */
-void packet_codec_build_aad(const aad_context_t* ctx, uint8_t* aad, size_t* aad_len) {
+/* Build AAD (Additional Authenticated Data) */
+void packet_codec_build_aad(
+    const aad_context_t* ctx,
+    uint8_t* aad,
+    size_t* aad_len)
+{
     size_t idx = 0;
+
     aad[idx++] = (ctx->round_id >> 24) & 0xFF;
     aad[idx++] = (ctx->round_id >> 16) & 0xFF;
     aad[idx++] = (ctx->round_id >> 8) & 0xFF;
     aad[idx++] = ctx->round_id & 0xFF;
+
     aad[idx++] = ctx->client_id;
+
     aad[idx++] = (ctx->chunk_index >> 8) & 0xFF;
     aad[idx++] = ctx->chunk_index & 0xFF;
+
     aad[idx++] = (ctx->chunk_size >> 8) & 0xFF;
     aad[idx++] = ctx->chunk_size & 0xFF;
+
     *aad_len = idx;
 }
 
-/* Internal helper to build MAC data with AAD - forward declaration */
-static void packet_codec_build_aad_data(const aad_context_t* ctx, uint8_t* mac_data, size_t* mac_data_len);
+/* Internal helper to build MAC data with AAD */
+static void packet_codec_build_aad_data(
+    const aad_context_t* ctx,
+    uint8_t* mac_data,
+    size_t* mac_data_len)
+{
+    size_t idx = 0;
 
-/* Enhanced validation with AAD binding */
-pqc_status_t packet_codec_validate_message(const msg_header_t* hdr, const aad_context_t* expected_aad, const uint8_t* mac_key, const uint8_t* received_mac) {
-    if (!hdr || !expected_aad || !mac_key || !received_mac) return ERR_INVALID_ARGUMENT;
+    mac_data[idx++] = (ctx->round_id >> 24) & 0xFF;
+    mac_data[idx++] = (ctx->round_id >> 16) & 0xFF;
+    mac_data[idx++] = (ctx->round_id >> 8) & 0xFF;
+    mac_data[idx++] = ctx->round_id & 0xFF;
+
+    mac_data[idx++] = ctx->client_id;
+
+    mac_data[idx++] = (ctx->chunk_index >> 8) & 0xFF;
+    mac_data[idx++] = ctx->chunk_index & 0xFF;
+
+    mac_data[idx++] = (ctx->chunk_size >> 8) & 0xFF;
+    mac_data[idx++] = ctx->chunk_size & 0xFF;
+
+    *mac_data_len = idx;
+}
+
+/*
+ * Validate message metadata and verify its AAD-bound MAC.
+ *
+ * NOTE:
+ * This function intentionally preserves the existing protocol
+ * behavior where the MAC covers the AAD data only. Payload MAC
+ * authentication is handled by packet_codec_encode_message()
+ * and packet_codec_decode_message().
+ */
+pqc_status_t packet_codec_validate_message(
+    const msg_header_t* hdr,
+    const aad_context_t* expected_aad,
+    const uint8_t* mac_key,
+    const uint8_t* received_mac)
+{
+    if (!hdr ||
+        !expected_aad ||
+        !mac_key ||
+        !received_mac) {
+        return ERR_INVALID_ARGUMENT;
+    }
 
     /* Validate round ID */
     if (hdr->round_id != expected_aad->round_id) {
@@ -146,93 +311,241 @@ pqc_status_t packet_codec_validate_message(const msg_header_t* hdr, const aad_co
         return ERR_SEQUENCE_MISMATCH;
     }
 
-    /* Validate chunk size */
+    /* Validate maximum payload size */
+    if (hdr->payload_length > MAX_CHUNK_SIZE) {
+        return ERR_CHUNK_TOO_LARGE;
+    }
+
+    /* Validate expected chunk size */
     if (hdr->payload_length != expected_aad->chunk_size) {
         return ERR_CHUNK_TOO_LARGE;
     }
 
-    /* Verify MAC with AAD binding */
-    uint8_t aad[8];
-    size_t aad_len;
-    packet_codec_build_aad(expected_aad, aad, &aad_len);
+    /*
+     * Build the AAD-bound MAC data.
+     */
+    uint8_t mac_data[MAC_DATA_FIXED_SIZE];
+    size_t mac_data_len = 0;
 
-    /* Build MAC data with AAD binding */
-    uint8_t mac_data[12 + 1024];
-    size_t mac_data_len = 12;
-    packet_codec_build_aad_data(expected_aad, mac_data, &mac_data_len);
+    packet_codec_build_aad_data(
+        expected_aad,
+        mac_data,
+        &mac_data_len);
 
-    return packet_codec_verify_mac(NULL, mac_data, mac_data_len, received_mac);
+    /*
+     * Use the supplied MAC key.
+     *
+     * The previous implementation incorrectly passed NULL here,
+     * which caused packet_codec_verify_mac() to always return
+     * ERR_INVALID_ARGUMENT.
+     */
+    return packet_codec_verify_mac(
+        mac_key,
+        mac_data,
+        mac_data_len,
+        received_mac);
 }
 
-/* Internal helper to build MAC data with AAD */
-static void packet_codec_build_aad_data(const aad_context_t* ctx, uint8_t* mac_data, size_t* mac_data_len) {
-    size_t idx = 0;
-    mac_data[idx++] = (ctx->round_id >> 24) & 0xFF;
-    mac_data[idx++] = (ctx->round_id >> 16) & 0xFF;
-    mac_data[idx++] = (ctx->round_id >> 8) & 0xFF;
-    mac_data[idx++] = ctx->round_id & 0xFF;
-    mac_data[idx++] = ctx->client_id;
-    mac_data[idx++] = (ctx->chunk_index >> 8) & 0xFF;
-    mac_data[idx++] = ctx->chunk_index & 0xFF;
-    mac_data[idx++] = (ctx->chunk_size >> 8) & 0xFF;
-    mac_data[idx++] = ctx->chunk_size & 0xFF;
-    *mac_data_len = idx;
-}
+pqc_status_t packet_codec_encode_message(
+    const msg_header_t* hdr,
+    const uint8_t* payload,
+    const uint8_t* mac_key,
+    uint8_t* out,
+    size_t* out_len)
+{
+    if (!hdr ||
+        !out ||
+        !out_len ||
+        !mac_key) {
+        return ERR_INVALID_ARGUMENT;
+    }
 
-pqc_status_t packet_codec_encode_message(const msg_header_t* hdr, const uint8_t* payload, const uint8_t* mac_key, uint8_t* out, size_t* out_len) {
-    if (!hdr || !out || !out_len || !mac_key) return ERR_INVALID_ARGUMENT;
-    if (hdr->payload_length > 0 && !payload) return ERR_INVALID_ARGUMENT;
-    pqc_status_t ret = packet_codec_encode_header(hdr, out);
-    if (ret != PQC_SUCCESS) return ret;
+    if (hdr->payload_length > 0 && !payload) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    /*
+     * Prevent the variable payload from exceeding the bounded
+     * stack buffer used for MAC construction.
+     */
+    if (hdr->payload_length > MAX_CHUNK_SIZE) {
+        return ERR_CHUNK_TOO_LARGE;
+    }
+
+    pqc_status_t ret =
+        packet_codec_encode_header(hdr, out);
+
+    if (ret != PQC_SUCCESS) {
+        return ret;
+    }
+
     if (hdr->payload_length > 0) {
-        memcpy(out + PAYLOAD_OFFSET, payload, hdr->payload_length);
+        memcpy(
+            out + PAYLOAD_OFFSET,
+            payload,
+            hdr->payload_length);
     }
-    uint8_t mac_data[12 + 1024];
-    size_t mac_data_len = 12;
-    build_mac_data(hdr, payload, hdr->payload_length, mac_data);
+
+    uint8_t mac_data[MAX_MAC_DATA_SIZE];
+    size_t mac_data_len = MAC_DATA_FIXED_SIZE;
+
+    build_mac_data(
+        hdr,
+        payload,
+        hdr->payload_length,
+        mac_data);
+
     mac_data_len += hdr->payload_length;
-    uint8_t mac[32];
-    ret = packet_codec_compute_mac(mac_key, mac_data, mac_data_len, mac);
-    if (ret != PQC_SUCCESS) return ret;
-    memcpy(out + MAC_OFFSET, mac, 32);
-    *out_len = PAYLOAD_OFFSET + hdr->payload_length;
+
+    uint8_t mac[MAC_SIZE];
+
+    ret = packet_codec_compute_mac(
+        mac_key,
+        mac_data,
+        mac_data_len,
+        mac);
+
+    if (ret != PQC_SUCCESS) {
+        return ret;
+    }
+
+    memcpy(
+        out + MAC_OFFSET,
+        mac,
+        MAC_SIZE);
+
+    *out_len =
+        PAYLOAD_OFFSET +
+        hdr->payload_length;
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_decode_message(const uint8_t* in, size_t in_len, const uint8_t* mac_key, msg_header_t* hdr, uint8_t* payload, size_t* payload_len) {
-    if (!in || !hdr || !mac_key || in_len < PAYLOAD_OFFSET) return ERR_INVALID_ARGUMENT;
-    pqc_status_t ret = packet_codec_decode_header(in, hdr);
-    if (ret != PQC_SUCCESS) return ret;
-    if (in_len < PAYLOAD_OFFSET + hdr->payload_length) return ERR_INVALID_ARGUMENT;
-    uint8_t mac_data[12 + 1024];
-    size_t mac_data_len = 12;
-    build_mac_data(hdr, in + PAYLOAD_OFFSET, hdr->payload_length, mac_data);
+pqc_status_t packet_codec_decode_message(
+    const uint8_t* in,
+    size_t in_len,
+    const uint8_t* mac_key,
+    msg_header_t* hdr,
+    uint8_t* payload,
+    size_t* payload_len)
+{
+    if (!in ||
+        !hdr ||
+        !mac_key ||
+        in_len < PAYLOAD_OFFSET) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    pqc_status_t ret =
+        packet_codec_decode_header(
+            in,
+            hdr);
+
+    if (ret != PQC_SUCCESS) {
+        return ret;
+    }
+
+    /*
+     * Reject oversized payloads before constructing the
+     * bounded MAC buffer.
+     */
+    if (hdr->payload_length > MAX_CHUNK_SIZE) {
+        return ERR_CHUNK_TOO_LARGE;
+    }
+
+    /*
+     * Check that the complete header + MAC + payload exists
+     * in the supplied input buffer.
+     */
+    if (in_len <
+        PAYLOAD_OFFSET + hdr->payload_length) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    uint8_t mac_data[MAX_MAC_DATA_SIZE];
+    size_t mac_data_len = MAC_DATA_FIXED_SIZE;
+
+    build_mac_data(
+        hdr,
+        in + PAYLOAD_OFFSET,
+        hdr->payload_length,
+        mac_data);
+
     mac_data_len += hdr->payload_length;
-    uint8_t received_mac[32];
-    memcpy(received_mac, in + MAC_OFFSET, 32);
-    ret = packet_codec_verify_mac(mac_key, mac_data, mac_data_len, received_mac);
-    if (ret != PQC_SUCCESS) return ret;
+
+    uint8_t received_mac[MAC_SIZE];
+
+    memcpy(
+        received_mac,
+        in + MAC_OFFSET,
+        MAC_SIZE);
+
+    ret = packet_codec_verify_mac(
+        mac_key,
+        mac_data,
+        mac_data_len,
+        received_mac);
+
+    if (ret != PQC_SUCCESS) {
+        return ret;
+    }
+
     if (hdr->payload_length > 0 && payload) {
-        memcpy(payload, in + PAYLOAD_OFFSET, hdr->payload_length);
+        memcpy(
+            payload,
+            in + PAYLOAD_OFFSET,
+            hdr->payload_length);
     }
-    if (payload_len) *payload_len = hdr->payload_length;
+
+    if (payload_len) {
+        *payload_len = hdr->payload_length;
+    }
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_validate_sequence(const msg_header_t* hdr, uint16_t expected_seq) {
-    if (!hdr) return ERR_INVALID_ARGUMENT;
-    if (hdr->sequence_number != expected_seq) return ERR_SEQUENCE_MISMATCH;
+pqc_status_t packet_codec_validate_sequence(
+    const msg_header_t* hdr,
+    uint16_t expected_seq)
+{
+    if (!hdr) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    if (hdr->sequence_number != expected_seq) {
+        return ERR_SEQUENCE_MISMATCH;
+    }
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_validate_round(const msg_header_t* hdr, uint32_t expected_round) {
-    if (!hdr) return ERR_INVALID_ARGUMENT;
-    if (hdr->round_id != expected_round) return ERR_ROUND_MISMATCH;
+pqc_status_t packet_codec_validate_round(
+    const msg_header_t* hdr,
+    uint32_t expected_round)
+{
+    if (!hdr) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    if (hdr->round_id != expected_round) {
+        return ERR_ROUND_MISMATCH;
+    }
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t packet_codec_validate_client(const msg_header_t* hdr, uint8_t expected_client) {
-    if (!hdr) return ERR_INVALID_ARGUMENT;
-    if (hdr->client_id != 0 && hdr->client_id != expected_client) return ERR_CLIENT_ID_MISMATCH;
+pqc_status_t packet_codec_validate_client(
+    const msg_header_t* hdr,
+    uint8_t expected_client)
+{
+    if (!hdr) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    if (hdr->client_id != 0 &&
+        hdr->client_id != expected_client) {
+        return ERR_CLIENT_ID_MISMATCH;
+    }
+
     return PQC_SUCCESS;
 }

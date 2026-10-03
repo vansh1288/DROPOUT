@@ -57,6 +57,7 @@ SECTIONS
 
 ASSERT(_eheap == _sheap, "HEAP USAGE DETECTED - Zero heap policy violated")
 ASSERT(_ebss <= ORIGIN(RAM) + LENGTH(RAM), "RAM overflow")
+ASSERT(_estack <= ORIGIN(RAM) + LENGTH(RAM), "STACK overflow")
 
 /DISCARD/ :
 {

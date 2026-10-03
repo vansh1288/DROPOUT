@@ -1,5 +1,6 @@
 #include "dma_stream_bridge.h"
 #include "memory_scratchpad.h"
+
 #ifdef TEST_BUILD
 #include "freertos_mock.h"
 #else
@@ -7,196 +8,456 @@
 #include "task.h"
 #include "semphr.h"
 #endif
+
 #include <string.h>
 #include <stdint.h>
 
-/* External reference to stream task handle set by dma_isr_set_stream_task */
+/*
+ * External reference to the stream task handle configured by
+ * dma_isr_set_stream_task().
+ */
 extern TaskHandle_t g_stream_task_handle;
 
-pqc_status_t dma_stream_bridge_init(dma_stream_bridge_t* bridge, uint32_t timeout_ms) {
-    if (!bridge) return ERR_INVALID_ARGUMENT;
 
-    memset(bridge, 0, sizeof(dma_stream_bridge_t));
+/*
+ * Initialize the DMA stream bridge.
+ */
+pqc_status_t dma_stream_bridge_init(
+    dma_stream_bridge_t* bridge,
+    uint32_t timeout_ms)
+{
+    if (bridge == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    memset(bridge, 0, sizeof(*bridge));
+
     bridge->chunks[0].state = DMA_STREAM_BUF_STATE_FREE;
     bridge->chunks[1].state = DMA_STREAM_BUF_STATE_FREE;
-    bridge->active_idx = 0;
-    bridge->processing_idx = 0;
-    bridge->chunk_sequence = 0;
-    bridge->chunks_dropped = 0;
-    bridge->chunks_processed = 0;
-    bridge->chunk_timeout_ms = timeout_ms ? timeout_ms : 1000;
 
-    /* Initialize DMA buffers from scratchpad */
+    bridge->active_idx = 0u;
+    bridge->processing_idx = 0u;
+    bridge->chunk_sequence = 0u;
+    bridge->chunks_dropped = 0u;
+    bridge->chunks_processed = 0u;
+
+    bridge->chunk_timeout_ms =
+        (timeout_ms != 0u) ? timeout_ms : 1000u;
+
+    /*
+     * Initialize the DMA RX ping-pong buffers.
+     */
     dma_double_buffer_t* dma_rx = scratch_get_dma_rx();
+
     crypto_zeroize(dma_rx->ping, DMA_BUFFER_BYTES);
     crypto_zeroize(dma_rx->pong, DMA_BUFFER_BYTES);
 
-    /* Point bridge buffers to the DMA ping-pong buffers */
-    bridge->chunks[0].buffer = scratch_get_dma_rx_active(0);  // ping
-    bridge->chunks[1].buffer = scratch_get_dma_rx_active(1);  // pong
+    /*
+     * Bridge buffers point directly into the scratchpad DMA buffers.
+     */
+    bridge->chunks[0].buffer =
+        scratch_get_dma_rx_active(0);
+
+    bridge->chunks[1].buffer =
+        scratch_get_dma_rx_active(1);
+
+    if (bridge->chunks[0].buffer == NULL ||
+        bridge->chunks[1].buffer == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
 
     return PQC_SUCCESS;
 }
 
-BaseType_t dma_stream_bridge_rx_complete_isr(dma_stream_bridge_t* bridge, uint16_t length) {
+
+/*
+ * DMA RX completion ISR callback.
+ */
+BaseType_t dma_stream_bridge_rx_complete_isr(
+    dma_stream_bridge_t* bridge,
+    uint16_t length)
+{
     BaseType_t higher_priority_task_woken = pdFALSE;
 
-    if (!bridge) return pdFALSE;
+    if (bridge == NULL) {
+        return pdFALSE;
+    }
 
-    uint8_t idx = bridge->active_idx;
-
-    /* Validate buffer state - must be FREE to accept new data */
-    if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_FREE) {
-        /* Buffer not ready - overflow condition */
+    /*
+     * DMA_BUFFER_BYTES is the hard upper bound for one DMA buffer.
+     */
+    if (length == 0u || length > DMA_BUFFER_BYTES) {
         bridge->chunks_dropped++;
         return pdFALSE;
     }
 
-    /* Update buffer metadata */
+    const uint8_t idx = bridge->active_idx;
+
+    /*
+     * The active buffer must be free when DMA completes.
+     * Otherwise the consumer has not returned the buffer quickly enough.
+     */
+    if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_FREE) {
+        bridge->chunks_dropped++;
+        return pdFALSE;
+    }
+
+    /*
+     * Publish the received buffer.
+     *
+     * Metadata is written before the state changes to FULL so the
+     * consumer never observes a FULL buffer with incomplete metadata.
+     */
     bridge->chunks[idx].length = length;
     bridge->chunks[idx].chunk_index = bridge->chunk_sequence++;
-    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FULL;
     bridge->chunks[idx].timestamp = xTaskGetTickCountFromISR();
+    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FULL;
 
-    /* Toggle to next buffer for next DMA transfer */
+    /*
+     * Switch to the other ping-pong buffer for the next DMA transfer.
+     */
     bridge->active_idx ^= 1u;
 
-    /* Notify stream task */
+    /*
+     * Wake the stream task.
+     */
     if (g_stream_task_handle != NULL) {
-        BaseType_t higher_priority_task_woken = pdFALSE;
-        xTaskNotifyFromISR(g_stream_task_handle, 0x01, eSetBits, &higher_priority_task_woken);
+        xTaskNotifyFromISR(
+            g_stream_task_handle,
+            0x01u,
+            eSetBits,
+            &higher_priority_task_woken
+        );
+
         portYIELD_FROM_ISR(higher_priority_task_woken);
     }
 
-    return pdTRUE;
+    return higher_priority_task_woken;
 }
 
-BaseType_t dma_stream_bridge_error_isr(dma_stream_bridge_t* bridge) {
+
+/*
+ * DMA error ISR callback.
+ */
+BaseType_t dma_stream_bridge_error_isr(
+    dma_stream_bridge_t* bridge)
+{
     BaseType_t higher_priority_task_woken = pdFALSE;
 
-    if (!bridge) return pdFALSE;
+    if (bridge == NULL) {
+        return pdFALSE;
+    }
 
-    uint8_t idx = bridge->active_idx;
+    const uint8_t idx = bridge->active_idx;
+
     bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_ERROR;
     bridge->chunks_dropped++;
 
     if (g_stream_task_handle != NULL) {
-        BaseType_t higher_priority_task_woken = pdFALSE;
-        xTaskNotifyFromISR(g_stream_task_handle, 0x80, eSetBits, &higher_priority_task_woken);
+        xTaskNotifyFromISR(
+            g_stream_task_handle,
+            0x80u,
+            eSetBits,
+            &higher_priority_task_woken
+        );
+
         portYIELD_FROM_ISR(higher_priority_task_woken);
     }
 
-    return pdTRUE;
+    return higher_priority_task_woken;
 }
 
-pqc_status_t dma_stream_bridge_get_rx_buffer(dma_stream_bridge_t* bridge, uint8_t** buffer_out, uint16_t* max_len) {
-    if (!bridge || !buffer_out || !max_len) return ERR_INVALID_ARGUMENT;
 
-    uint8_t idx = bridge->active_idx;
+/*
+ * Get the currently active DMA RX buffer.
+ *
+ * This is used when software explicitly prepares a DMA transfer.
+ */
+pqc_status_t dma_stream_bridge_get_rx_buffer(
+    dma_stream_bridge_t* bridge,
+    uint8_t** buffer_out,
+    uint16_t* max_len)
+{
+    if (bridge == NULL ||
+        buffer_out == NULL ||
+        max_len == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    const uint8_t idx = bridge->active_idx;
 
     if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_FREE) {
-        return ERR_BUFFER_TOO_SMALL;  // Buffer not available
+        return ERR_DMA_BUSY;
     }
 
     *buffer_out = bridge->chunks[idx].buffer;
     *max_len = DMA_BUFFER_BYTES;
-    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FREE; // Will be filled by DMA
 
+    /*
+     * The buffer remains logically owned by DMA until completion.
+     * The DMA completion ISR transitions it to FULL.
+     */
     return PQC_SUCCESS;
 }
 
-pqc_status_t dma_stream_bridge_submit_buffer(dma_stream_bridge_t* bridge, uint16_t length) {
-    if (!bridge) return ERR_INVALID_ARGUMENT;
 
-    uint8_t idx = bridge->active_idx ^ 1u; // Previous buffer
+/*
+ * Submit a completed DMA buffer from software.
+ *
+ * Kept for transports that complete DMA through task context rather
+ * than the hardware ISR path.
+ */
+pqc_status_t dma_stream_bridge_submit_buffer(
+    dma_stream_bridge_t* bridge,
+    uint16_t length)
+{
+    if (bridge == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    if (length == 0u || length > DMA_BUFFER_BYTES) {
+        return ERR_CHUNK_TOO_LARGE;
+    }
+
+    const uint8_t idx = bridge->active_idx;
 
     if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_FREE) {
         bridge->chunks_dropped++;
-        return ERR_GENERIC;
+        return ERR_DMA_BUSY;
     }
 
     bridge->chunks[idx].length = length;
     bridge->chunks[idx].chunk_index = bridge->chunk_sequence++;
-    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FULL;
     bridge->chunks[idx].timestamp = xTaskGetTickCount();
+    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FULL;
+
+    bridge->active_idx ^= 1u;
 
     return PQC_SUCCESS;
 }
 
-pqc_status_t dma_stream_bridge_get_chunk(dma_stream_bridge_t* bridge, uint8_t** data_out, uint16_t* length_out, uint16_t* chunk_index, uint32_t timeout_ms) {
-    if (!bridge || !data_out || !length_out || !chunk_index) return ERR_INVALID_ARGUMENT;
 
-    uint32_t timeout_ticks = pdMS_TO_TICKS(timeout_ms);
-    uint32_t start_tick = xTaskGetTickCount();
+/*
+ * Get the next completed DMA buffer.
+ *
+ * This function is called from the stream task.
+ */
+pqc_status_t dma_stream_bridge_get_chunk(
+    dma_stream_bridge_t* bridge,
+    uint8_t** data_out,
+    uint16_t* length_out,
+    uint16_t* chunk_index,
+    uint32_t timeout_ms)
+{
+    if (bridge == NULL ||
+        data_out == NULL ||
+        length_out == NULL ||
+        chunk_index == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
 
-    while (1) {
+    /*
+     * A zero timeout means "use the bridge's configured timeout".
+     */
+    const uint32_t effective_timeout_ms =
+        (timeout_ms != 0u)
+            ? timeout_ms
+            : bridge->chunk_timeout_ms;
+
+    const TickType_t timeout_ticks =
+        pdMS_TO_TICKS(effective_timeout_ms);
+
+    const TickType_t start_tick =
+        xTaskGetTickCount();
+
+    for (;;) {
+
+        /*
+         * Prefer the current processing index, then inspect the
+         * other ping-pong buffer. This prevents a FULL buffer from
+         * being missed simply because the other buffer was processed
+         * previously.
+         */
         uint8_t idx = bridge->processing_idx;
 
+        if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_FULL) {
+            idx ^= 1u;
+        }
+
         if (bridge->chunks[idx].state == DMA_STREAM_BUF_STATE_FULL) {
-            /* Found a ready buffer */
+
             *data_out = bridge->chunks[idx].buffer;
             *length_out = bridge->chunks[idx].length;
             *chunk_index = bridge->chunks[idx].chunk_index;
 
-            bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_PROCESSING;
-            bridge->processing_idx ^= 1u;
+            /*
+             * Transfer ownership from the DMA/producer side to the
+             * stream-processing side.
+             */
+            bridge->chunks[idx].state =
+                DMA_STREAM_BUF_STATE_PROCESSING;
+
+            /*
+             * Next lookup starts with the other ping-pong buffer.
+             */
+            bridge->processing_idx = idx ^ 1u;
+
             bridge->chunks_processed++;
 
             return PQC_SUCCESS;
         }
 
-        /* Check timeout */
-        uint32_t elapsed = xTaskGetTickCount() - xTaskGetTickCount(); // Simplified
-        if (elapsed >= pdMS_TO_TICKS(bridge->chunk_timeout_ms)) {
+        /*
+         * Correct timeout calculation:
+         *
+         * elapsed = current_tick - start_tick
+         *
+         * The previous implementation subtracted the current tick
+         * from itself, which always produced zero.
+         */
+        const TickType_t current_tick =
+            xTaskGetTickCount();
+
+        const TickType_t elapsed =
+            current_tick - start_tick;
+
+        if (elapsed >= timeout_ticks) {
             return ERR_NETWORK_TIMEOUT;
         }
 
-        /* Wait for notification */
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10));
+        /*
+         * Do not sleep longer than the remaining timeout.
+         */
+        TickType_t wait_ticks =
+            pdMS_TO_TICKS(10u);
+
+        const TickType_t remaining =
+            timeout_ticks - elapsed;
+
+        if (wait_ticks > remaining) {
+            wait_ticks = remaining;
+        }
+
+        /*
+         * A zero-tick wait would otherwise create a busy loop.
+         */
+        if (wait_ticks == 0u) {
+            return ERR_NETWORK_TIMEOUT;
+        }
+
+        (void)ulTaskNotifyTake(
+            pdTRUE,
+            wait_ticks
+        );
     }
 }
 
-pqc_status_t dma_stream_bridge_release_buffer(dma_stream_bridge_t* bridge, uint8_t buffer_index) {
-    if (!bridge || buffer_index >= 2) return ERR_INVALID_ARGUMENT;
 
-    if (bridge->chunks[buffer_index].state == DMA_STREAM_BUF_STATE_PROCESSING) {
-        crypto_zeroize(bridge->chunks[buffer_index].buffer, DMA_BUFFER_BYTES);
-        bridge->chunks[buffer_index].length = 0;
-        bridge->chunks[buffer_index].chunk_index = 0;
-        bridge->chunks[buffer_index].state = DMA_STREAM_BUF_STATE_FREE;
-        return PQC_SUCCESS;
+/*
+ * Release a buffer after stream processing.
+ */
+pqc_status_t dma_stream_bridge_release_buffer(
+    dma_stream_bridge_t* bridge,
+    uint8_t buffer_index)
+{
+    if (bridge == NULL || buffer_index >= 2u) {
+        return ERR_INVALID_ARGUMENT;
     }
 
-    return ERR_INVALID_STATE;
-}
+    uint8_t idx = buffer_index;
 
-pqc_status_t dma_stream_bridge_get_stats(dma_stream_bridge_t* bridge, uint16_t* chunks_processed, uint16_t* chunks_dropped) {
-    if (!bridge || !chunks_processed || !chunks_dropped) return ERR_INVALID_ARGUMENT;
+    /*
+     * The current stream task calls this API with buffer index 0.
+     * If that is not the buffer actually being processed, locate the
+     * processing buffer safely rather than freeing the wrong buffer.
+     */
+    if (bridge->chunks[idx].state != DMA_STREAM_BUF_STATE_PROCESSING) {
+        const uint8_t other_idx = idx ^ 1u;
 
-    *chunks_processed = bridge->chunks_processed;
-    *chunks_dropped = bridge->chunks_dropped;
+        if (bridge->chunks[other_idx].state ==
+            DMA_STREAM_BUF_STATE_PROCESSING) {
+            idx = other_idx;
+        } else {
+            return ERR_INVALID_STATE;
+        }
+    }
+
+    /*
+     * Sensitive model data must not remain in a released DMA buffer.
+     */
+    crypto_zeroize(
+        bridge->chunks[idx].buffer,
+        DMA_BUFFER_BYTES
+    );
+
+    bridge->chunks[idx].length = 0u;
+    bridge->chunks[idx].chunk_index = 0u;
+    bridge->chunks[idx].timestamp = 0u;
+    bridge->chunks[idx].state = DMA_STREAM_BUF_STATE_FREE;
+
     return PQC_SUCCESS;
 }
 
-pqc_status_t dma_stream_bridge_reset(dma_stream_bridge_t* bridge) {
-    if (!bridge) return ERR_INVALID_ARGUMENT;
 
-    bridge->active_idx = 0;
-    bridge->processing_idx = 0;
-    bridge->chunk_sequence = 0;
-    bridge->chunks_dropped = 0;
-    bridge->chunks_processed = 0;
+/*
+ * Get bridge statistics.
+ */
+pqc_status_t dma_stream_bridge_get_stats(
+    dma_stream_bridge_t* bridge,
+    uint16_t* chunks_processed,
+    uint16_t* chunks_dropped)
+{
+    if (bridge == NULL ||
+        chunks_processed == NULL ||
+        chunks_dropped == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
 
-    bridge->chunks[0].state = DMA_STREAM_BUF_STATE_FREE;
-    bridge->chunks[1].state = DMA_STREAM_BUF_STATE_FREE;
-    bridge->chunks[0].length = 0;
-    bridge->chunks[1].length = 0;
-    bridge->chunks[0].chunk_index = 0;
-    bridge->chunks[1].chunk_index = 0;
+    *chunks_processed = bridge->chunks_processed;
+    *chunks_dropped = bridge->chunks_dropped;
 
+    return PQC_SUCCESS;
+}
+
+
+/*
+ * Reset the bridge to its initial state.
+ */
+pqc_status_t dma_stream_bridge_reset(
+    dma_stream_bridge_t* bridge)
+{
+    if (bridge == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    bridge->active_idx = 0u;
+    bridge->processing_idx = 0u;
+    bridge->chunk_sequence = 0u;
+    bridge->chunks_dropped = 0u;
+    bridge->chunks_processed = 0u;
+
+    for (uint8_t i = 0u; i < 2u; i++) {
+        bridge->chunks[i].length = 0u;
+        bridge->chunks[i].chunk_index = 0u;
+        bridge->chunks[i].timestamp = 0u;
+        bridge->chunks[i].state = DMA_STREAM_BUF_STATE_FREE;
+    }
+
+    /*
+     * Clear both DMA RX buffers so no previous model data survives
+     * a bridge reset.
+     */
     dma_double_buffer_t* dma_rx = scratch_get_dma_rx();
-    crypto_zeroize(dma_rx->ping, DMA_BUFFER_BYTES);
-    crypto_zeroize(dma_rx->pong, DMA_BUFFER_BYTES);
+
+    crypto_zeroize(
+        dma_rx->ping,
+        DMA_BUFFER_BYTES
+    );
+
+    crypto_zeroize(
+        dma_rx->pong,
+        DMA_BUFFER_BYTES
+    );
 
     return PQC_SUCCESS;
 }
