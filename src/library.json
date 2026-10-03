@@ -1,0 +1,24 @@
+{
+  "name": "dropout_tests",
+  "version": "1.0.0",
+  "description": "DROPOUT test suite",
+  "keywords": ["crypto", "pqc", "testing"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vansh1288/DROPOUT"
+  },
+  "authors": [
+    {
+      "name": "DROPOUT Team",
+      "email": "team@dropout.example"
+    }
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/vansh1288/DROPOUT",
+  "keywords": ["crypto", "pqc", "testing"],
+  "frameworks": ["native"],
+  "platforms": ["native"],
+  "build": {
+    "srcFilter": "+<**/*.c> +<**/*.h>"
+  }
+}

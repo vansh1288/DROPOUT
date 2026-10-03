@@ -9,6 +9,7 @@
 #define MLKEM_WORKSPACE_BYTES     4096u
 #define CRYPTO_WORKSPACE_BYTES    2048u
 #define DMA_BUFFER_BYTES          1536u
+#define DMA_CHUNK_BYTES           256u
 #define CHUNK_BUFFER_BYTES        1024u
 #define SHAMIR_WORKSPACE_BYTES    12288u
 #define PROTOCOL_STATE_BYTES      512u

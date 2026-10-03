@@ -1,17 +1,15 @@
 
 #include "memory_scratchpad.h"
 #include "protocol_types.h"
+#include "dma_stream_bridge.h"
+#include "stream_aggregator.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "semphr.h"
 #include <stdint.h>
 
-#define DMA_CHUNK_ELEMENTS 128
-#define DMA_CHUNK_BYTES (DMA_CHUNK_ELEMENTS * sizeof(int16_t))
-
 static volatile uint8_t g_dma_rx_active = 0;
 static volatile uint8_t g_dma_tx_active = 0;
-static TaskHandle_t g_stream_task_handle = NULL;
 
 static inline void dma_rx_buffer_switch(void) {
     g_dma_rx_active ^= 1u;
@@ -34,8 +32,10 @@ static inline uint8_t* dma_get_tx_buffer(void) {
 void dma_isr_rx_complete(void) {
     BaseType_t higher_priority_task_woken = pdFALSE;
     dma_rx_buffer_switch();
-    if (g_stream_task_handle != NULL) {
-        xTaskNotifyFromISR(g_stream_task_handle, 0x01, eSetBits, &higher_priority_task_woken);
+    /* Notify stream task via DMA stream bridge */
+    dma_stream_bridge_t* bridge = stream_aggregator_get_dma_bridge();
+    if (bridge) {
+        dma_stream_bridge_rx_complete_isr(bridge, DMA_CHUNK_BYTES);
     }
     portYIELD_FROM_ISR(higher_priority_task_woken);
 }
