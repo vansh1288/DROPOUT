@@ -296,6 +296,18 @@ class MockClient:
         """
         if peer_id in session.shares_distributed_for or session.round_config is None:
             return
+        if session.client_id > peer_id:
+            # Only the LOWER-id member of a pair splits and distributes
+            # shares for that pair's secret. Both sides independently
+            # calling split_shared_secret would draw DIFFERENT random
+            # polynomial coefficients for the SAME secret -- different
+            # holders could then end up holding points from two
+            # incompatible polynomials that merely share the same
+            # constant term, and Lagrange interpolation across a mixed
+            # set doesn't error, it just silently reconstructs the wrong
+            # value. One canonical distributor per pair avoids that.
+            session.shares_distributed_for.add(peer_id)
+            return
         threshold = session.round_config.threshold or SHAMIR_THRESHOLD_FALLBACK
 
         other_client_ids = sorted(
