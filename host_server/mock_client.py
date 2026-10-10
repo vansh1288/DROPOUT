@@ -178,7 +178,7 @@ def _signed_mask_contribution(session: ClientSession, peer_id: int, chunk_idx: i
 
 
 class MockClient:
-    def __init__(self, client_id: int, round_id: int, host: str, port: int):
+    def __init__(self, client_id: int, round_id: int, host: str, port: int, simulate_crash_after_sharing: bool = False):
         self.client_id = client_id
         self.round_id = round_id
         self.host = host
@@ -187,6 +187,12 @@ class MockClient:
         self.writer: Optional[asyncio.StreamWriter] = None
         self.session: Optional[ClientSession] = None
         self._sequence_counter = 0
+        # Test/simulation hook: when True, this client completes pairing
+        # and Shamir share distribution normally, then stops (as if it
+        # crashed) instead of ever streaming -- a deterministic way to
+        # exercise dropout recovery, instead of racing a task-cancellation
+        # against this client's own real async progress.
+        self.simulate_crash_after_sharing = simulate_crash_after_sharing
 
     def _next_sequence(self) -> int:
         self._sequence_counter += 1
@@ -328,6 +334,12 @@ class MockClient:
             return  # No round config yet, or streaming already started.
         if len(session.pairwise_secrets) < session.round_config.expected_clients - 1:
             return
+        if self.simulate_crash_after_sharing:
+            # Pretend this client crashed right after finishing pairing +
+            # share distribution, before ever streaming -- the connection
+            # stays open (a real crash wouldn't politely close it either),
+            # the test harness is responsible for forcibly closing it.
+            return
 
         num_chunks = session.round_config.num_chunks
         chunk_size = session.round_config.chunk_size
@@ -340,8 +352,17 @@ class MockClient:
                 contribution = _signed_mask_contribution(session, peer_id, chunk_idx, chunk_size)
                 masked = [(m + c) % FIELD_MODULUS for m, c in zip(masked, contribution)]
 
+            # IMPORTANT: the header's sequence_number is a pure per-client
+            # anti-replay counter (strictly increasing across EVERY
+            # message type this client sends, enforced server-side), not a
+            # chunk index -- a chunk's position must be carried in the
+            # PAYLOAD instead, or the server's reassembly ends up keying
+            # received_chunks by an unrelated counter value and discards
+            # every real chunk as "out of range" (num_chunks is small;
+            # the anti-replay sequence number is not).
             masked_bytes = struct.pack(f">{chunk_size}h", *masked)
-            await self._send(MSG_TYPE_MASK_CHUNK, masked_bytes)
+            chunk_payload = struct.pack(">H", chunk_idx) + masked_bytes
+            await self._send(MSG_TYPE_MASK_CHUNK, chunk_payload)
 
         await self._send(MSG_TYPE_CLIENT_COMPLETE, session.sample_count.to_bytes(4, "big"))
 
