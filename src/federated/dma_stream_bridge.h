@@ -1,138 +1,158 @@
+
 #ifndef DMA_STREAM_BRIDGE_H
 #define DMA_STREAM_BRIDGE_H
-
-#include "protocol_types.h"
-#include <stdint.h>
-#include <stddef.h>
 
 #ifdef TEST_BUILD
 typedef long BaseType_t;
 #define pdFALSE ((BaseType_t)0)
-#define pdTRUE ((BaseType_t)1)
+#define pdTRUE  ((BaseType_t)1)
 #else
 #include "FreeRTOS.h"
 #include "task.h"
-#endif
-
-#ifdef __cplusplus
 extern "C" {
 #endif
 
-/**
- * DMA Stream Bridge - bridges DMA RX ISR to stream aggregator task
+/*
+ * DMA Stream Bridge
  *
- * Provides a thread-safe bridge between DMA RX ISR and the stream aggregator task.
- * Implements ping-pong buffer ownership tracking and proper synchronization.
+ * Bridges DMA RX completion events to the stream aggregator task.
+ * Tracks ping-pong buffer ownership and prevents a buffer from being
+ * reused while the consumer is processing it.
  */
 
-#define DMA_STREAM_MAX_CHUNKS_PER_BUFFER (DMA_BUFFER_BYTES / 2)  // 768 int16_t elements
+#define DMA_STREAM_MAX_CHUNKS_PER_BUFFER (DMA_BUFFER_BYTES / 2u)
 
 typedef enum {
-    DMA_STREAM_BUF_STATE_FREE     = 0,  // Buffer available for DMA RX
-    DMA_STREAM_BUF_STATE_FULL     = 1,  // Buffer filled by DMA, ready for processing
-    DMA_STREAM_BUF_STATE_PROCESSING = 2, // Being processed by stream task
-    DMA_STREAM_BUF_STATE_ERROR    = 3   // Error state
+    DMA_STREAM_BUF_STATE_FREE       = 0,
+    DMA_STREAM_BUF_STATE_FULL       = 1,
+    DMA_STREAM_BUF_STATE_PROCESSING  = 2,
+    DMA_STREAM_BUF_STATE_ERROR      = 3
 } dma_stream_buf_state_t;
 
 typedef struct {
-    uint8_t* buffer;                    // Pointer to buffer data
-    uint16_t length;                    // Valid data length in bytes
-    uint16_t chunk_index;               // Chunk sequence number
-    dma_stream_buf_state_t state;       // Buffer state
-    uint32_t timestamp;                 // Timestamp when filled (tick count)
+    uint8_t* buffer;
+    uint16_t length;
+    uint16_t chunk_index;
+    dma_stream_buf_state_t state;
+    uint32_t timestamp;
 } dma_stream_chunk_t;
 
 typedef struct {
-    dma_stream_chunk_t chunks[2];       // Ping-pong buffers
-    volatile uint8_t active_idx;        // Index of buffer currently being filled by DMA (0 or 1)
-    volatile uint8_t processing_idx;    // Index of buffer being processed
-    volatile uint16_t chunk_sequence;   // Monotonically increasing chunk sequence number
-    volatile uint16_t chunks_dropped;   // Count of dropped chunks
-    volatile uint16_t chunks_processed; // Count of successfully processed chunks
-    uint32_t chunk_timeout_ms;          // Timeout for chunk processing (ms)
+    dma_stream_chunk_t chunks[2];
+
+    volatile uint8_t active_idx;
+    volatile uint8_t processing_idx;
+    volatile uint16_t chunk_sequence;
+    volatile uint16_t chunks_dropped;
+    volatile uint16_t chunks_processed;
+
+    uint32_t chunk_timeout_ms;
 } dma_stream_bridge_t;
 
-/**
- * Initialize the DMA stream bridge
- * @param bridge Pointer to bridge structure to initialize
- * @param timeout_ms Timeout for chunk processing in milliseconds
- * @return PQC_SUCCESS on success, error code on failure
+/*
+ * Initialize the DMA stream bridge.
  */
-pqc_status_t dma_stream_bridge_init(dma_stream_bridge_t* bridge, uint32_t timeout_ms);
+pqc_status_t dma_stream_bridge_init(
+    dma_stream_bridge_t* bridge,
+    uint32_t timeout_ms
+);
 
-/**
- * Called from DMA RX complete ISR when a buffer is filled
- * @param bridge Pointer to bridge structure
- * @param length Actual bytes received
- * @return pdTRUE if a task was woken, pdFALSE otherwise
- * @note Must be called from ISR context only
+/*
+ * Notify the bridge that DMA RX completed.
+ *
+ * ISR context only.
+ *
+ * Returns pdTRUE if a task was woken, otherwise pdFALSE.
  */
-BaseType_t dma_stream_bridge_rx_complete_isr(dma_stream_bridge_t* bridge, uint16_t length);
+BaseType_t dma_stream_bridge_rx_complete_isr(
+    dma_stream_bridge_t* bridge,
+    uint16_t length
+);
 
-/**
- * Called from DMA error ISR
- * @param bridge Pointer to bridge structure
- * @return pdTRUE if a task was woken, pdFALSE otherwise
- * @note Must be called from ISR context only
+/*
+ * Notify the bridge of a DMA error.
+ *
+ * ISR context only.
  */
-BaseType_t dma_stream_bridge_error_isr(dma_stream_bridge_t* bridge);
+BaseType_t dma_stream_bridge_error_isr(
+    dma_stream_bridge_t* bridge
+);
 
-/**
- * Get the next available buffer for DMA RX
- * @param bridge Pointer to bridge structure
- * @param buffer_out Output pointer to buffer address
- * @param max_len Maximum length that can be received
- * @return PQC_SUCCESS on success, error code otherwise
- * @note Must be called from task context
+/*
+ * Get the currently active buffer available for DMA RX.
+ *
+ * The returned buffer remains owned by the producer/DMA until
+ * completion is reported.
  */
-pqc_status_t dma_stream_bridge_get_rx_buffer(dma_stream_bridge_t* bridge, uint8_t** buffer_out, uint16_t* max_len);
+pqc_status_t dma_stream_bridge_get_rx_buffer(
+    dma_stream_bridge_t* bridge,
+    uint8_t** buffer_out,
+    uint16_t* max_len
+);
 
-/**
- * Mark a buffer as filled and ready for processing
- * @param bridge Pointer to bridge structure
- * @param length Actual data length received
- * @return PQC_SUCCESS on success, error code otherwise
- * @note Called from ISR context after DMA transfer completes
+/*
+ * Submit a completed buffer through the software submission path.
  */
-pqc_status_t dma_stream_bridge_submit_buffer(dma_stream_bridge_t* bridge, uint16_t length);
+pqc_status_t dma_stream_bridge_submit_buffer(
+    dma_stream_bridge_t* bridge,
+    uint16_t length
+);
 
-/**
- * Get the next filled buffer for processing
- * @param bridge Pointer to bridge structure
- * @param chunk_out Output chunk structure
- * @param timeout_ms Timeout in milliseconds
- * @return PQC_SUCCESS on success, ERR_NETWORK_TIMEOUT on timeout
- * @note Called from stream task context
+/*
+ * Get the next completed DMA buffer for processing.
+ *
+ * data_out:
+ *     Receives the pointer to the completed buffer.
+ *
+ * length_out:
+ *     Receives the valid payload length in bytes.
+ *
+ * chunk_index_out:
+ *     Receives the chunk's sequence number.
+ *
+ * buffer_index_out:
+ *     Receives the physical ping-pong buffer index: 0 or 1.
+ *     This value must be passed to dma_stream_bridge_release_buffer().
+ *
+ * timeout_ms:
+ *     Maximum wait time in milliseconds. Zero uses the configured
+ *     bridge timeout.
+ *
+ * Task context only.
  */
-pqc_status_t dma_stream_bridge_get_chunk(dma_stream_bridge_t* bridge, uint8_t** data_out, uint16_t* length_out, uint16_t* chunk_index, uint32_t timeout_ms);
+pqc_status_t dma_stream_bridge_get_chunk(
+    dma_stream_bridge_t* bridge,
+    uint8_t** data_out,
+    uint16_t* length_out,
+    uint16_t* chunk_index_out,
+    uint8_t* buffer_index_out,
+    uint32_t timeout_ms
+);
 
-/**
- * Release a buffer back to the free pool after processing
- * @param bridge Pointer to bridge structure
- * @param buffer_index Index of buffer to release (0 or 1)
- * @return PQC_SUCCESS on success, error code otherwise
- * @note Called from stream task context after processing
+/*
+ * Release the exact ping-pong buffer returned by get_chunk().
+ *
+ * The buffer is zeroized before being returned to the free pool.
  */
-pqc_status_t dma_stream_bridge_release_buffer(dma_stream_bridge_t* bridge, uint8_t buffer_index);
+pqc_status_t dma_stream_bridge_release_buffer(
+    dma_stream_bridge_t* bridge,
+    uint8_t buffer_index
+);
 
-/**
- * Get bridge statistics
- * @param bridge Pointer to bridge structure
- * @param chunks_processed Output: number of chunks processed
- * @param chunks_dropped Output: number of chunks dropped
- * @return PQC_SUCCESS
+/*
+ * Retrieve bridge statistics.
  */
-pqc_status_t dma_stream_bridge_get_stats(dma_stream_bridge_t* bridge, uint16_t* chunks_processed, uint16_t* chunks_dropped);
+pqc_status_t dma_stream_bridge_get_stats(
+    dma_stream_bridge_t* bridge,
+    uint16_t* chunks_processed,
+    uint16_t* chunks_dropped
+);
 
-/**
- * Reset the bridge to initial state
- * @param bridge Pointer to bridge structure
- * @return PQC_SUCCESS
+/*
+ * Reset bridge state and clear DMA buffers.
  */
-pqc_status_t dma_stream_bridge_reset(dma_stream_bridge_t* bridge);
+pqc_status_t dma_stream_bridge_reset(
+    dma_stream_bridge_t* bridge
+);
 
 #ifdef __cplusplus
-}
-#endif
-
-#endif // DMA_STREAM_BRIDGE_H
