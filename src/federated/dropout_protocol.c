@@ -3,410 +3,497 @@
 #include "crypto_memory.h"
 #include "kem_adapter.h"
 #include "dropout_protocol.h"
+
 #ifdef TEST_BUILD
 #include "mask_prg_mock.h"
 #else
 #include "mask_prg.h"
 #endif
+
 #include "shamir.h"
 #include "hkdf.h"
+
 #include <stdint.h>
+#include <stddef.h>
 #include <string.h>
 
-/* Forward declarations */
-static inline int is_valid_chunk_size(uint16_t chunk_size);
-static inline int16_t mod_q(int32_t val);
+#define DROPOUT_KEY_BYTES       32u
+#define DROPOUT_SEED_BYTES      32u
+#define DROPOUT_FIELD_MODULUS   3329
 
-/* Derive a 32-byte key from the 64-byte Shamir secret using HKDF-SHA256
- * This allows using the recovered Shamir secret with ML-KEM APIs that expect 32-byte shared secrets
- */
-static pqc_status_t derive_key_from_shamir_secret(const uint8_t* shamir_secret, uint8_t* derived_key) {
-    if (!shamir_secret || !derived_key) {
+typedef struct {
+    uint8_t share_id;
+    uint8_t value[SHAMIR_SHARE_VALUE_BYTES];
+} shamir_recovery_share_t;
+
+typedef struct {
+    uint32_t round_id;
+    uint8_t client_id;
+    uint8_t threshold;
+    uint8_t shares_received;
+    uint8_t required_shares;
+    shamir_recovery_share_t shares[MAX_RECOVERY_SHARES];
+    uint8_t share_ids[MAX_RECOVERY_SHARES];
+    uint8_t recovered_secret[SHAMIR_SECRET_BYTES];
+    int recovery_complete;
+} dropout_recovery_ctx_t;
+
+static dropout_recovery_ctx_t g_recovery_ctx;
+
+static int is_valid_chunk_size(uint16_t chunk_size)
+{
+    return chunk_size == 64u ||
+           chunk_size == 128u ||
+           chunk_size == 256u ||
+           chunk_size == 512u ||
+           chunk_size == 1024u;
+}
+
+static int16_t mod_q(int32_t value)
+{
+    int32_t r = value % DROPOUT_FIELD_MODULUS;
+    if (r < 0) {
+        r += DROPOUT_FIELD_MODULUS;
+    }
+    return (int16_t)r;
+}
+
+/* The Shamir secret is 32 GF(3329) elements serialized as 64 bytes. */
+static pqc_status_t derive_key_from_shamir_secret(
+    const uint8_t *shamir_secret,
+    uint8_t *derived_key)
+{
+    static const uint8_t info[] = "dropout-recovery-key";
+    uint8_t salt[DROPOUT_KEY_BYTES] = {0};
+
+    if (shamir_secret == NULL || derived_key == NULL) {
         return ERR_INVALID_ARGUMENT;
     }
 
-    /* Use HKDF-SHA256 to derive a 32-byte key from the 64-byte Shamir secret
-     * Salt: empty (zero-filled)
-     * IKM: the 64-byte Shamir secret
-     * Info: "dropout-recovery-key"
-     * Output: 32 bytes
-     */
-    static const uint8_t info[] = "dropout-recovery-key";
-    uint8_t salt[32] = {0};  /* Empty salt = all zeros */
-
-    int ret = hkdf_sha256(salt, 32, shamir_secret, SHAMIR_SECRET_BYTES, info, sizeof(info) - 1, derived_key, 32);
-    if (ret != 0) {
+    if (hkdf_sha256(
+            salt, sizeof(salt),
+            shamir_secret, SHAMIR_SECRET_BYTES,
+            info, sizeof(info) - 1u,
+            derived_key, DROPOUT_KEY_BYTES) != 0) {
+        crypto_zeroize(salt, sizeof(salt));
+        crypto_zeroize(derived_key, DROPOUT_KEY_BYTES);
         return ERR_KDF_FAILED;
     }
+
+    crypto_zeroize(salt, sizeof(salt));
     return PQC_SUCCESS;
 }
 
-/* Shamir share structure as received over network */
-typedef struct {
-    uint8_t share_id;                    /* Share identifier (1-255) */
-    uint8_t value[SHAMIR_SHARE_VALUE_BYTES];  /* 64 bytes = 32 elements * 2 bytes */
-} shamir_recovery_share_t;
+/*
+ * Derive the same per-chunk seed used by both mask application and removal.
+ * Pairwise seed derivation must be part of both paths; deriving the stream
+ * seed directly from the original key would make the two masks differ.
+ */
+static pqc_status_t derive_pairwise_stream_seed(
+    const uint8_t *key,
+    uint8_t client_id,
+    uint8_t peer_id,
+    uint32_t round_id,
+    uint16_t chunk_index,
+    uint8_t stream_seed[DROPOUT_SEED_BYTES])
+{
+    uint8_t pairwise_seed[DROPOUT_SEED_BYTES] = {0};
+    pqc_status_t status;
 
-/* Recovery session context */
-typedef struct {
-    uint32_t round_id;
-    uint8_t  client_id;           /* The dropped-out client being recovered */
-    uint8_t  threshold;           /* Shamir threshold (t) */
-    uint8_t  shares_received;     /* Number of shares collected */
-    uint8_t  required_shares;     /* Threshold t */
-    shamir_recovery_share_t shares[MAX_RECOVERY_SHARES];
-    uint8_t  share_ids[MAX_RECOVERY_SHARES];  /* Track share IDs for duplicate detection */
-    uint8_t  recovered_secret[SHAMIR_SECRET_BYTES];
-    int      recovery_complete;
-} dropout_recovery_ctx_t;
+    status = kem_adapter_derive_pairwise_mask_seed(
+        key, client_id, peer_id, round_id, pairwise_seed);
+    if (status != PQC_SUCCESS) {
+        crypto_zeroize(pairwise_seed, sizeof(pairwise_seed));
+        crypto_zeroize(stream_seed, DROPOUT_SEED_BYTES);
+        return status;
+    }
 
-/* Global recovery context (one at a time per client) */
-static dropout_recovery_ctx_t g_recovery_ctx = {0};
+    status = kem_adapter_derive_stream_mask_seed(
+        pairwise_seed, client_id, round_id, chunk_index, stream_seed);
 
-/* Initialize recovery session for a dropped-out client */
+    crypto_zeroize(pairwise_seed, sizeof(pairwise_seed));
+    if (status != PQC_SUCCESS) {
+        crypto_zeroize(stream_seed, DROPOUT_SEED_BYTES);
+    }
+    return status;
+}
+
+/* Initialize one recovery session for one dropped-out client. */
 pqc_status_t dropout_protocol_init_recovery(
     uint32_t round_id,
-    uint8_t  client_id,
-    uint8_t  threshold
-) {
-    if (threshold == 0 || threshold > MAX_RECOVERY_SHARES) {
+    uint8_t client_id,
+    uint8_t threshold)
+{
+    if (threshold == 0u || threshold > MAX_RECOVERY_SHARES) {
         return ERR_INVALID_THRESHOLD;
     }
 
-    memset(&g_recovery_ctx, 0, sizeof(g_recovery_ctx));
+    crypto_zeroize(&g_recovery_ctx, sizeof(g_recovery_ctx));
     g_recovery_ctx.round_id = round_id;
     g_recovery_ctx.client_id = client_id;
     g_recovery_ctx.threshold = threshold;
     g_recovery_ctx.required_shares = threshold;
-    g_recovery_ctx.shares_received = 0;
-    g_recovery_ctx.recovery_complete = 0;
-
     return PQC_SUCCESS;
 }
 
-/* Submit a Shamir share for recovery
- * Returns PQC_SUCCESS on valid new share, ERR_DUPLICATE_SHARE_ID on duplicate,
- * ERR_INSUFFICIENT_SHARES if not enough shares yet, PQC_SUCCESS when threshold reached
- */
+/* Submit a distinct share; reconstruct exactly when the threshold is met. */
 pqc_status_t dropout_protocol_submit_share(
     uint8_t share_id,
-    const uint8_t* share_value,
-    size_t share_len
-) {
-    if (!share_value || share_len != SHAMIR_SHARE_VALUE_BYTES) {
+    const uint8_t *share_value,
+    size_t share_len)
+{
+    uint8_t *share_x;
+    const uint8_t **share_y;
+    uint16_t *workspace;
+    size_t pointer_bytes;
+    size_t workspace_offset;
+    int ret;
+
+    if (share_value == NULL || share_len != SHAMIR_SHARE_VALUE_BYTES ||
+        share_id == 0u) {
         return ERR_INVALID_ARGUMENT;
     }
-
-    if (share_id == 0 || share_id > 255) {
-        return ERR_INVALID_ARGUMENT;
+    if (g_recovery_ctx.required_shares == 0u) {
+        return ERR_INVALID_STATE;
     }
-
     if (g_recovery_ctx.recovery_complete) {
         return ERR_INVALID_STATE;
     }
 
-    /* Check for duplicate share ID */
-    for (uint8_t i = 0; i < g_recovery_ctx.shares_received; i++) {
+    for (uint8_t i = 0u; i < g_recovery_ctx.shares_received; ++i) {
         if (g_recovery_ctx.share_ids[i] == share_id) {
             return ERR_DUPLICATE_SHARE_ID;
         }
     }
 
-    /* Check if we already have enough shares */
-    if (g_recovery_ctx.shares_received >= g_recovery_ctx.required_shares) {
+    if (g_recovery_ctx.shares_received >= g_recovery_ctx.required_shares ||
+        g_recovery_ctx.shares_received >= MAX_RECOVERY_SHARES) {
+        return ERR_INVALID_STATE;
+    }
+
+    uint8_t index = g_recovery_ctx.shares_received;
+    g_recovery_ctx.share_ids[index] = share_id;
+    g_recovery_ctx.shares[index].share_id = share_id;
+    memcpy(g_recovery_ctx.shares[index].value, share_value, share_len);
+    g_recovery_ctx.shares_received++;
+
+    if (g_recovery_ctx.shares_received < g_recovery_ctx.required_shares) {
         return PQC_SUCCESS;
     }
 
-    /* Store the share */
-    uint8_t idx = g_recovery_ctx.shares_received;
-    g_recovery_ctx.share_ids[idx] = share_id;
-    memcpy(g_recovery_ctx.shares[idx].value, share_value, SHAMIR_SHARE_VALUE_BYTES);
-    g_recovery_ctx.shares[idx].share_id = share_id;
-    g_recovery_ctx.shares_received++;
+    /*
+     * Use a scratchpad region with explicitly aligned, non-overlapping
+     * arrays. The byte-share API requires one x-coordinate per share and
+     * a pointer to each 64-byte y-value.
+     */
+    share_x = g_scratchpad.raw;
+    pointer_bytes = (size_t)MAX_RECOVERY_SHARES * sizeof(*share_y);
+    workspace_offset = MAX_RECOVERY_SHARES + pointer_bytes;
+    workspace_offset = (workspace_offset + sizeof(uint16_t) - 1u) &
+                       ~(sizeof(uint16_t) - 1u);
 
-    /* Check if we have enough shares to reconstruct */
-    if (g_recovery_ctx.shares_received >= g_recovery_ctx.required_shares) {
-        /* Reconstruct the secret */
-        uint8_t* share_x = g_scratchpad.raw;  /* Use scratchpad for temp storage */
-        uint8_t** share_y = (uint8_t**)(g_scratchpad.raw + MAX_RECOVERY_SHARES);
-        uint16_t* workspace = (uint16_t*)(g_scratchpad.raw + MAX_RECOVERY_SHARES + MAX_RECOVERY_SHARES * 8);
-
-        /* Prepare share_x and share_y arrays for reconstruction */
-        for (uint8_t i = 0; i < g_recovery_ctx.shares_received; i++) {
-            share_x[i] = g_recovery_ctx.share_ids[i];
-            share_y[i] = g_recovery_ctx.shares[i].value;
-        }
-
-        int ret = shamir_reconstruct_bytes(
-            g_recovery_ctx.recovered_secret,
-            (const uint8_t*)share_x,
-            (const uint8_t**)share_y,
-            g_recovery_ctx.required_shares,
-            workspace
-        );
-
-        if (ret != 0) {
-            return ERR_SHAMIR_DECODE_FAILED;
-        }
-
-        g_recovery_ctx.recovery_complete = 1;
+    if (workspace_offset + (size_t)SHAMIR_WORKSPACE_SIZE * sizeof(uint16_t) >
+        sizeof(g_scratchpad.raw)) {
+        crypto_zeroize(&g_recovery_ctx, sizeof(g_recovery_ctx));
+        return ERR_BUFFER_TOO_SMALL;
     }
 
+    share_y = (const uint8_t **)(void *)(g_scratchpad.raw + MAX_RECOVERY_SHARES);
+    workspace = (uint16_t *)(void *)(g_scratchpad.raw + workspace_offset);
+
+    for (uint8_t i = 0u; i < g_recovery_ctx.shares_received; ++i) {
+        share_x[i] = g_recovery_ctx.shares[i].share_id;
+        share_y[i] = g_recovery_ctx.shares[i].value;
+    }
+
+    ret = shamir_reconstruct_bytes(
+        g_recovery_ctx.recovered_secret,
+        share_x,
+        share_y,
+        g_recovery_ctx.required_shares,
+        workspace);
+
+    crypto_zeroize(g_scratchpad.raw, workspace_offset +
+                   (size_t)SHAMIR_WORKSPACE_SIZE * sizeof(uint16_t));
+
+    if (ret != 0) {
+        crypto_zeroize(g_recovery_ctx.recovered_secret,
+                       sizeof(g_recovery_ctx.recovered_secret));
+        g_recovery_ctx.shares_received--;
+        crypto_zeroize(&g_recovery_ctx.shares[index],
+                       sizeof(g_recovery_ctx.shares[index]));
+        g_recovery_ctx.share_ids[index] = 0u;
+        return ERR_SHAMIR_DECODE_FAILED;
+    }
+
+    g_recovery_ctx.recovery_complete = 1;
     return PQC_SUCCESS;
 }
 
-/* Check if recovery is complete */
-int dropout_protocol_is_recovery_complete(void) {
+int dropout_protocol_is_recovery_complete(void)
+{
     return g_recovery_ctx.recovery_complete;
 }
 
-/* Get the recovered Shamir secret (64 bytes) */
-const uint8_t* dropout_protocol_get_recovered_secret(void) {
-    if (!g_recovery_ctx.recovery_complete) {
-        return NULL;
-    }
-    return g_recovery_ctx.recovered_secret;
+const uint8_t *dropout_protocol_get_recovered_secret(void)
+{
+    return g_recovery_ctx.recovery_complete
+        ? g_recovery_ctx.recovered_secret : NULL;
 }
 
-/* Derive mask for recovery using recovered Shamir secret
- * This connects the recovered secret to the mask generation pipeline
+/*
+ * Produce chunk_size BYTES of mask into mask, where chunk_size is a byte
+ * count as documented in dropout_protocol.h (not a count of int16 elements).
  */
 pqc_status_t dropout_protocol_derive_mask_for_recovery(
     uint32_t round_id,
     uint16_t chunk_index,
     uint8_t peer_id,
-    int16_t* mask,
-    uint16_t chunk_size
-) {
-    if (!mask) return ERR_INVALID_ARGUMENT;
+    int16_t *mask,
+    uint16_t chunk_size)
+{
+    uint8_t derived_key[DROPOUT_KEY_BYTES] = {0};
+    uint8_t stream_seed[DROPOUT_SEED_BYTES] = {0};
+    mask_prg_ctx_t prg_ctx;
+    pqc_status_t status;
+
+    memset(&prg_ctx, 0, sizeof(prg_ctx));
+
+    if (mask == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
     if (!g_recovery_ctx.recovery_complete) {
         return ERR_INVALID_STATE;
     }
-
-    if (!is_valid_chunk_size(chunk_size)) {
-        return ERR_CHUNK_TOO_LARGE;
+    if (round_id != g_recovery_ctx.round_id) {
+        return ERR_ROUND_MISMATCH;
     }
-
-    /* Derive 32-byte key from the 64-byte Shamir secret */
-    uint8_t derived_key[32];
-    pqc_status_t ret = derive_key_from_shamir_secret(g_recovery_ctx.recovered_secret, derived_key);
-    if (ret != PQC_SUCCESS) {
-        return ret;
-    }
-
-    /* Derive pairwise mask seed from derived key */
-    uint8_t pairwise_seed[32];
-    pqc_status_t ret2 = kem_adapter_derive_pairwise_mask_seed(
-        derived_key,
-        g_recovery_ctx.client_id,
-        peer_id,
-        round_id,
-        pairwise_seed
-    );
-    if (ret2 != PQC_SUCCESS) {
-        crypto_zeroize(derived_key, 32);
-        return ret2;
-    }
-
-    /* Derive stream mask seed for this chunk */
-    uint8_t stream_seed[32];
-    pqc_status_t ret3 = kem_adapter_derive_stream_mask_seed(
-        pairwise_seed,
-        g_recovery_ctx.client_id,
-        round_id,
-        chunk_index,
-        stream_seed
-    );
-    if (ret3 != PQC_SUCCESS) {
-        crypto_zeroize(pairwise_seed, 32);
-        crypto_zeroize(derived_key, 32);
-        return ret3;
-    }
-
-    /* Generate mask using mask PRG */
-    mask_prg_ctx_t prg_ctx;
-    int ret4 = mask_prg_init(&prg_ctx, stream_seed);
-    if (ret4 != 0) {
-        crypto_zeroize(stream_seed, 32);
-        crypto_zeroize(pairwise_seed, 32);
-        crypto_zeroize(derived_key, 32);
-        return ERR_PRG_FAILED;
-    }
-
-    int ret5 = mask_prg_get_bytes(&prg_ctx, (uint8_t*)mask, chunk_size * sizeof(int16_t));
-    if (ret5 != 0) {
-        crypto_zeroize(stream_seed, 32);
-        crypto_zeroize(pairwise_seed, 32);
-        crypto_zeroize(derived_key, 32);
-        mask_prg_cleanup(&prg_ctx);
-        return ERR_PRG_FAILED;
-    }
-
-    /* Zeroize temporary secrets */
-    crypto_zeroize(stream_seed, 32);
-    crypto_zeroize(pairwise_seed, 32);
-    crypto_zeroize(derived_key, 32);
-    mask_prg_cleanup(&prg_ctx);
-
-    return PQC_SUCCESS;
-}
-
-/* Apply recovered mask to unmask a chunk's data
- * This applies the recovered mask to unmask a chunk for a specific peer
- */
-pqc_status_t dropout_protocol_unmask_chunk(
-    const uint8_t* shared_secret,
-    uint32_t round_id,
-    uint16_t chunk_index,
-    uint8_t client_id,
-    uint8_t peer_id,
-    const int16_t* masked_data,
-    int16_t* unmasked_output,
-    uint16_t chunk_size
-) {
-    if (!shared_secret || !masked_data || !unmasked_output) {
+    if (!is_valid_chunk_size(chunk_size) ||
+        (chunk_size % sizeof(int16_t)) != 0u) {
         return ERR_INVALID_ARGUMENT;
     }
 
-    if (!is_valid_chunk_size(chunk_size)) {
-        return ERR_CHUNK_TOO_LARGE;
+    status = derive_key_from_shamir_secret(
+        g_recovery_ctx.recovered_secret, derived_key);
+    if (status != PQC_SUCCESS) {
+        goto cleanup;
     }
 
-    uint8_t derived_key[32];
-    uint8_t* key_to_use = (uint8_t*)shared_secret;
-    int derived = 0;
-
-    /* Check if we're in recovery mode and the shared_secret matches the recovered Shamir secret */
-    if (g_recovery_ctx.recovery_complete && 
-        shared_secret == g_recovery_ctx.recovered_secret) {
-        /* Derive 32-byte key from the 64-byte Shamir secret */
-        pqc_status_t ret1 = derive_key_from_shamir_secret(g_recovery_ctx.recovered_secret, derived_key);
-        if (ret1 != PQC_SUCCESS) {
-            return ret1;
-        }
-        key_to_use = derived_key;
-    } else {
-        /* Assume shared_secret is already a 32-byte ML-KEM shared secret */
-        /* No derivation needed */
+    status = derive_pairwise_stream_seed(
+        derived_key, g_recovery_ctx.client_id, peer_id,
+        round_id, chunk_index, stream_seed);
+    if (status != PQC_SUCCESS) {
+        goto cleanup;
     }
 
-    /* Derive mask for the specific peer */
-    uint8_t pairwise_seed[32];
-    pqc_status_t ret2 = kem_adapter_derive_pairwise_mask_seed(
-        key_to_use,
-        client_id,
-        peer_id,
-        round_id,
-        pairwise_seed
-    );
-    if (ret2 != PQC_SUCCESS) return ret2;
-
-    uint8_t stream_seed[32];
-    pqc_status_t ret3 = kem_adapter_derive_stream_mask_seed(
-        (const uint8_t*)key_to_use,
-        client_id,
-        round_id,
-        chunk_index,
-        stream_seed
-    );
-    if (ret3 != PQC_SUCCESS) {
-        crypto_zeroize(pairwise_seed, 32);
-        return ret3;
+    if (mask_prg_init(&prg_ctx, stream_seed) != 0) {
+        status = ERR_PRG_FAILED;
+        goto cleanup;
     }
 
-    mask_prg_ctx_t prg_ctx;
-    int ret4 = mask_prg_init(&prg_ctx, stream_seed);
-    if (ret4 != 0) {
-        crypto_zeroize(stream_seed, 32);
-        crypto_zeroize(pairwise_seed, 32);
-        return ERR_PRG_FAILED;
-    }
-
-    int16_t mask[CHUNK_BUFFER_BYTES / 2];
-    int ret5 = mask_prg_get_bytes(&prg_ctx, (uint8_t*)mask, chunk_size * sizeof(int16_t));
-    if (ret5 != 0) {
-        crypto_zeroize(stream_seed, 32);
-        crypto_zeroize(pairwise_seed, 32);
+    /* chunk_size is bytes, so do not multiply by sizeof(int16_t). */
+    if (mask_prg_get_bytes(&prg_ctx, (uint8_t *)mask, chunk_size) != 0) {
+        status = ERR_PRG_FAILED;
         mask_prg_cleanup(&prg_ctx);
-        return ERR_PRG_FAILED;
+        goto cleanup;
     }
 
-    /* Unmask: unmasked = masked - mask (mod q) */
-    const int16_t* masked = (const int16_t*)masked_data;
-    int16_t* output = (int16_t*)unmasked_output;
-    size_t num_elements = chunk_size / 2;
+    mask_prg_cleanup(&prg_ctx);
+    status = PQC_SUCCESS;
 
-    for (size_t i = 0; i < num_elements; i++) {
-        int32_t diff = (int32_t)masked[i] - (int32_t)mask[i];
-        output[i] = (int16_t)mod_q(diff);
+cleanup:
+    crypto_zeroize(derived_key, sizeof(derived_key));
+    crypto_zeroize(stream_seed, sizeof(stream_seed));
+    crypto_zeroize(&prg_ctx, sizeof(prg_ctx));
+    if (status != PQC_SUCCESS) {
+        crypto_zeroize(mask, chunk_size);
     }
-
-    /* Zeroize temporary secrets */
-    crypto_zeroize(stream_seed, 32);
-    crypto_zeroize(pairwise_seed, 32);
-
-    return PQC_SUCCESS;
+    return status;
 }
 
-/* Apply recovered mask to apply mask for a client's chunk
- * This is used when the recovered client needs to apply its mask to outgoing data
+/*
+ * Unmasking contract: chunk_size is bytes; buffers contain chunk_size/2
+ * signed 16-bit field elements. The PRG emits exactly chunk_size mask bytes.
+ * The seed derivation is shared with apply_recovered_mask().
  */
-pqc_status_t dropout_protocol_apply_recovered_mask(
-    const uint8_t* shared_secret,
+pqc_status_t dropout_protocol_unmask_chunk(
+    const uint8_t *shared_secret,
     uint32_t round_id,
     uint16_t chunk_index,
     uint8_t client_id,
     uint8_t peer_id,
-    const int16_t* plaintext_chunk,
-    int16_t* masked_output,
-    uint16_t chunk_size
-) {
-    /* This uses the recovered Shamir secret to generate the pairwise mask
-     * and apply it to the plaintext chunk, producing masked output */
-    return dropout_protocol_unmask_chunk(
-        shared_secret,
-        round_id,
-        chunk_index,
-        client_id,
-        peer_id,
-        plaintext_chunk,
-        masked_output,
-        chunk_size
-    );
+    const int16_t *masked_data,
+    int16_t *unmasked_output,
+    uint16_t chunk_size)
+{
+    uint8_t derived_key[DROPOUT_KEY_BYTES] = {0};
+    const uint8_t *key = shared_secret;
+    uint8_t stream_seed[DROPOUT_SEED_BYTES] = {0};
+    uint8_t mask_bytes[MAX_CHUNK_SIZE] = {0};
+    mask_prg_ctx_t prg_ctx;
+    pqc_status_t status;
+    size_t elements;
+
+    memset(&prg_ctx, 0, sizeof(prg_ctx));
+
+    if (shared_secret == NULL || masked_data == NULL ||
+        unmasked_output == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if (!is_valid_chunk_size(chunk_size) ||
+        (chunk_size % sizeof(int16_t)) != 0u) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    /*
+     * A pointer to the recovered secret means the caller supplied the
+     * 64-byte Shamir secret. Other callers supply a 32-byte KEM key.
+     * This preserves the existing API contract without reading beyond
+     * the 32-byte key for ordinary callers.
+     */
+    if (g_recovery_ctx.recovery_complete &&
+        shared_secret == g_recovery_ctx.recovered_secret) {
+        status = derive_key_from_shamir_secret(
+            g_recovery_ctx.recovered_secret, derived_key);
+        if (status != PQC_SUCCESS) {
+            goto cleanup;
+        }
+        key = derived_key;
+    }
+
+    status = derive_pairwise_stream_seed(
+        key, client_id, peer_id, round_id, chunk_index, stream_seed);
+    if (status != PQC_SUCCESS) {
+        goto cleanup;
+    }
+
+    if (mask_prg_init(&prg_ctx, stream_seed) != 0) {
+        status = ERR_PRG_FAILED;
+        goto cleanup;
+    }
+    if (mask_prg_get_bytes(&prg_ctx, mask_bytes, chunk_size) != 0) {
+        mask_prg_cleanup(&prg_ctx);
+        status = ERR_PRG_FAILED;
+        goto cleanup;
+    }
+    mask_prg_cleanup(&prg_ctx);
+
+    elements = (size_t)chunk_size / sizeof(int16_t);
+    for (size_t i = 0u; i < elements; ++i) {
+        int32_t diff = (int32_t)masked_data[i] -
+                       (int32_t)((int16_t)((uint16_t)mask_bytes[2u * i] |
+                                           ((uint16_t)mask_bytes[2u * i + 1u] << 8)));
+        unmasked_output[i] = mod_q(diff);
+    }
+    status = PQC_SUCCESS;
+
+cleanup:
+    crypto_zeroize(derived_key, sizeof(derived_key));
+    crypto_zeroize(stream_seed, sizeof(stream_seed));
+    crypto_zeroize(mask_bytes, sizeof(mask_bytes));
+    crypto_zeroize(&prg_ctx, sizeof(prg_ctx));
+    if (status != PQC_SUCCESS) {
+        /* Do not expose partial output on an error. */
+        crypto_zeroize(unmasked_output, chunk_size);
+    }
+    return status;
 }
 
-/* Clean up recovery session - zeroize all sensitive data */
-void dropout_protocol_cleanup(void) {
+/* Apply a mask to plaintext: masked = plaintext + mask (mod q). */
+pqc_status_t dropout_protocol_apply_recovered_mask(
+    const uint8_t *shared_secret,
+    uint32_t round_id,
+    uint16_t chunk_index,
+    uint8_t client_id,
+    uint8_t peer_id,
+    const int16_t *plaintext_chunk,
+    int16_t *masked_output,
+    uint16_t chunk_size)
+{
+    uint8_t derived_key[DROPOUT_KEY_BYTES] = {0};
+    const uint8_t *key = shared_secret;
+    uint8_t stream_seed[DROPOUT_SEED_BYTES] = {0};
+    uint8_t mask_bytes[MAX_CHUNK_SIZE] = {0};
+    mask_prg_ctx_t prg_ctx;
+    pqc_status_t status;
+    size_t elements;
+
+    memset(&prg_ctx, 0, sizeof(prg_ctx));
+
+    if (shared_secret == NULL || plaintext_chunk == NULL ||
+        masked_output == NULL) {
+        return ERR_INVALID_ARGUMENT;
+    }
+    if (!is_valid_chunk_size(chunk_size) ||
+        (chunk_size % sizeof(int16_t)) != 0u) {
+        return ERR_INVALID_ARGUMENT;
+    }
+
+    if (g_recovery_ctx.recovery_complete &&
+        shared_secret == g_recovery_ctx.recovered_secret) {
+        status = derive_key_from_shamir_secret(
+            g_recovery_ctx.recovered_secret, derived_key);
+        if (status != PQC_SUCCESS) {
+            goto cleanup;
+        }
+        key = derived_key;
+    }
+
+    status = derive_pairwise_stream_seed(
+        key, client_id, peer_id, round_id, chunk_index, stream_seed);
+    if (status != PQC_SUCCESS) {
+        goto cleanup;
+    }
+
+    if (mask_prg_init(&prg_ctx, stream_seed) != 0) {
+        status = ERR_PRG_FAILED;
+        goto cleanup;
+    }
+    if (mask_prg_get_bytes(&prg_ctx, mask_bytes, chunk_size) != 0) {
+        mask_prg_cleanup(&prg_ctx);
+        status = ERR_PRG_FAILED;
+        goto cleanup;
+    }
+    mask_prg_cleanup(&prg_ctx);
+
+    elements = (size_t)chunk_size / sizeof(int16_t);
+    for (size_t i = 0u; i < elements; ++i) {
+        uint16_t mask_value = (uint16_t)mask_bytes[2u * i] |
+                              ((uint16_t)mask_bytes[2u * i + 1u] << 8);
+        masked_output[i] = mod_q((int32_t)plaintext_chunk[i] +
+                                 (int32_t)mask_value);
+    }
+    status = PQC_SUCCESS;
+
+cleanup:
+    crypto_zeroize(derived_key, sizeof(derived_key));
+    crypto_zeroize(stream_seed, sizeof(stream_seed));
+    crypto_zeroize(mask_bytes, sizeof(mask_bytes));
+    crypto_zeroize(&prg_ctx, sizeof(prg_ctx));
+    if (status != PQC_SUCCESS) {
+        crypto_zeroize(masked_output, chunk_size);
+    }
+    return status;
+}
+
+void dropout_protocol_cleanup(void)
+{
     crypto_zeroize(&g_recovery_ctx, sizeof(g_recovery_ctx));
 }
 
-/* Check if recovery is complete */
-int dropout_protocol_is_complete(void) {
+int dropout_protocol_is_complete(void)
+{
     return g_recovery_ctx.recovery_complete;
 }
 
-/* Get recovery context info */
 void dropout_protocol_get_info(
-    uint32_t* round_id,
-    uint8_t* client_id,
-    uint8_t* threshold,
-    uint8_t* shares_received
-) {
-    if (round_id) *round_id = g_recovery_ctx.round_id;
-    if (client_id) *client_id = g_recovery_ctx.client_id;
-    if (threshold) *threshold = g_recovery_ctx.threshold;
-    if (shares_received) *shares_received = g_recovery_ctx.shares_received;
-}
-
-/* Helper function to check if chunk size is valid */
-static inline int is_valid_chunk_size(uint16_t chunk_size) {
-    return (chunk_size == 64 || chunk_size == 128 || chunk_size == 256 || 
-            chunk_size == 512 || chunk_size == 1024);
-}
-
-/* Modulo q operation for GF(3329) */
-static inline int16_t mod_q(int32_t val) {
-    int32_t r = val % 3329;
-    if (r < 0) r += 3329;
-    return (int16_t)r;
+    uint32_t *round_id,
+    uint8_t *client_id,
+    uint8_t *threshold,
+    uint8_t *shares_received)
+{
+    if (round_id != NULL) *round_id = g_recovery_ctx.round_id;
+    if (client_id != NULL) *client_id = g_recovery_ctx.client_id;
+    if (threshold != NULL) *threshold = g_recovery_ctx.threshold;
+    if (shares_received != NULL) *shares_received = g_recovery_ctx.shares_received;
 }
