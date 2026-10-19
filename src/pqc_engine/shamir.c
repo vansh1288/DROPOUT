@@ -32,9 +32,7 @@ void shamir_test_rng_init(const uint8_t seed[48]) {
 #endif
 
 static inline uint16_t barrett_reduce(uint32_t a) {
-    uint32_t t = (a * BARRETT_MULTIPLIER) >> BARRETT_SHIFT;
-    uint16_t r = (uint16_t)(a - t * FIELD_MODULUS);
-    return (r >= FIELD_MODULUS) ? (uint16_t)(r - FIELD_MODULUS) : r;
+    return (uint16_t)(a % FIELD_MODULUS);
 }
 
 uint16_t gf3329_barrett_reduce(uint32_t a) {
@@ -186,11 +184,20 @@ int shamir_share_bytes(const uint8_t* secret, size_t secret_len, uint8_t* share_
         secret_elements[i] = (uint16_t)(secret[2*i] | (secret[2*i + 1] << 8));
     }
 
-    uint16_t* share_x16 = (uint16_t*)share_x;
-    uint16_t** share_y16 = (uint16_t**)share_y;
+    uint16_t share_x16[SHAMIR_MAX_SHARES];
+    uint16_t* share_y16[SHAMIR_MAX_SHARES];
+    for (uint8_t i = 0; i < n; i++) {
+        if (!share_y[i]) return -1;
+        share_y16[i] = (uint16_t*)share_y[i];
+    }
 
     int ret = shamir_share(secret_elements, SHAMIR_SECRET_ELEMENTS, share_x16, share_y16, n, t, workspace);
-    return ret;
+    if (ret != 0) return ret;
+
+    for (uint8_t i = 0; i < n; i++) {
+        share_x[i] = (uint8_t)share_x16[i];
+    }
+    return 0;
 }
 
 int shamir_reconstruct_bytes(uint8_t* secret, const uint8_t* share_x, const uint8_t** share_y, uint8_t k, uint16_t* workspace) {
